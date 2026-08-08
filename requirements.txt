@@ -1,0 +1,10 @@
+anthropic>=0.69
+psycopg[binary]>=3.2
+pgvector>=0.3.6
+sentence-transformers>=3.0
+pyyaml>=6.0
+
+# Evaluación (solo necesario para `python -m evals.run`)
+ragas>=0.2.9
+langchain-anthropic>=0.3
+langchain-huggingface>=0.1
