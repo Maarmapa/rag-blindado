@@ -10,15 +10,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-import psycopg
-from pgvector.psycopg import register_vector
-
 from .config import settings
 from .guards import Permissions
 
 
 @contextmanager
 def connection():
+    # Importación perezosa: así `import ragb.pipeline` no exige el driver de
+    # Postgres, y el job `guards` de CI (que instala solo pytest) puede probar
+    # el cableado del pipeline además de las guardas.
+    import psycopg
+    from pgvector.psycopg import register_vector
+
     with psycopg.connect(settings.require_database()) as conn:
         register_vector(conn)
         yield conn

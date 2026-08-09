@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import functools
 
-import anthropic
-
 from .config import settings
 
 SYSTEM = """Eres un asistente de consulta documental. Respondes ÚNICAMENTE con
@@ -33,7 +31,9 @@ Reglas no negociables:
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> anthropic.Anthropic:
+def _client():
+    import anthropic  # perezoso: ver nota en store.py
+
     return anthropic.Anthropic(api_key=settings.require_anthropic())
 
 
