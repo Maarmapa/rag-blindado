@@ -17,6 +17,11 @@ class Settings:
     generation_model: str = os.getenv("GENERATION_MODEL", "claude-opus-5")
     judge_model: str = os.getenv("JUDGE_MODEL", "claude-opus-5")
 
+    # Corrective RAG: calificar el contexto y, si no sirve, reformular y
+    # volver a buscar. Apagarlo deja el pipeline lineal de siempre.
+    crag_enabled: bool = os.getenv("CRAG_ENABLED", "true").lower() not in ("0", "false", "no")
+    crag_max_rounds: int = int(os.getenv("CRAG_MAX_ROUNDS", "2"))
+
     collection: str = os.getenv("COLLECTION", "default")
     top_k: int = int(os.getenv("TOP_K", "5"))
     chunk_chars: int = int(os.getenv("CHUNK_CHARS", "900"))
