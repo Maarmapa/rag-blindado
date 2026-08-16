@@ -38,6 +38,9 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ragb
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # El juez de Ragas hace la mayor parte de las llamadas de este job y no
+      # necesita el modelo más caro para calificar relevancia y fidelidad.
+      JUDGE_MODEL: claude-haiku-4-5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,7 +50,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Indexar corpus
-        run: python -m ragb.cli ingest corpus/ --tenant eval --write
+        run: python -m ragb.cli --tenant eval ingest corpus/ --write
 
       - name: Evaluar calidad (faithfulness / relevancy / precision)
         run: python -m evals.run

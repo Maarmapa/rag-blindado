@@ -85,10 +85,10 @@ pip install -r requirements.txt
 cp .env.example .env        # completar DATABASE_URL y ANTHROPIC_API_KEY
 
 # Indexar (dry-run por defecto; --write ejecuta la escritura)
-python -m ragb.cli ingest corpus/ --tenant demo --write
+python -m ragb.cli --tenant demo ingest corpus/ --write
 
 # Consultar
-python -m ragb.cli ask "¿Cuál es el plazo de respuesta de severidad 1?" --tenant demo
+python -m ragb.cli --tenant demo ask "¿Cuál es el plazo de respuesta de severidad 1?"
 
 # Evaluar
 python -m evals.run

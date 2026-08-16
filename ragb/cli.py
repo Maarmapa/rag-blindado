@@ -1,7 +1,10 @@
 """CLI del pipeline.
 
-    python -m ragb.cli ingest corpus/ --tenant acme --write
-    python -m ragb.cli ask "¿Cuál es el plazo de severidad 1?" --tenant acme
+    python -m ragb.cli --tenant acme ingest corpus/ --write
+    python -m ragb.cli --tenant acme ask "¿Cuál es el plazo de severidad 1?"
+
+`--tenant` y `--collection` van ANTES del subcomando: están declarados en el
+parser de nivel superior, así que argparse los rechaza si aparecen después.
 """
 
 from __future__ import annotations
