@@ -171,7 +171,9 @@ def verificar_aserciones(traces: list[dict]) -> list[str]:
     return fallas
 
 
-def agregar(per_case: list[dict], traces: list[dict]) -> dict[str, float]:
+def agregar(
+    per_case: list[dict], traces: list[dict]
+) -> tuple[dict[str, float], dict[str, tuple[int, int]]]:
     """Promedia cada métrica sobre los casos a los que sí les corresponde.
 
     Se agrega acá en vez de usar el promedio de Ragas porque los casos con
@@ -179,22 +181,32 @@ def agregar(per_case: list[dict], traces: list[dict]) -> dict[str, float]:
     `nan` suelto se ignora —es un caso que el juez no pudo puntuar, no un
     cero—; si NINGÚN caso puntuó, la métrica queda en `nan` y `reprueba` la
     trata como falla.
+
+    Devuelve además la COBERTURA por métrica: (casos puntuados, casos que le
+    correspondían). Ignorar los `nan` en silencio deja un promedio que se ve
+    idéntico calculado sobre 7 casos o sobre 3, y eso es el mismo agujero que
+    el `nan` que aprobaba el gate, solo que un nivel más abajo. Acá se ignora,
+    pero se dice.
     """
     scores: dict[str, float] = {}
+    cobertura: dict[str, tuple[int, int]] = {}
     nombres = {k for case in per_case for k in case}
 
     for name in sorted(nombres):
-        valores = [
-            case[name]
+        aplicables = [
+            case.get(name)
             for case, trace in zip(per_case, traces)
-            if name in case
-            and isinstance(case[name], (int, float))
-            and not math.isnan(case[name])
-            and not (trace["expects_refusal"] and name in SKIP_ON_REFUSAL)
+            if not (trace["expects_refusal"] and name in SKIP_ON_REFUSAL)
+        ]
+        valores = [
+            v
+            for v in aplicables
+            if isinstance(v, (int, float)) and not math.isnan(v)
         ]
         scores[name] = sum(valores) / len(valores) if valores else math.nan
+        cobertura[name] = (len(valores), len(aplicables))
 
-    return scores
+    return scores, cobertura
 
 
 def reprueba(value: float, threshold: float) -> bool:
@@ -242,7 +254,7 @@ def main() -> int:
 
     # Agregación propia: los casos negativos salen de las métricas que no
     # saben calificarlos y se verifican con `verificar_aserciones`.
-    scores = agregar(per_case, traces)
+    scores, cobertura = agregar(per_case, traces)
     aserciones = verificar_aserciones(traces)
 
     failures = [
@@ -253,6 +265,7 @@ def main() -> int:
 
     report = {
         "scores": scores,
+        "coverage": {k: {"scored": s, "applicable": a} for k, (s, a) in cobertura.items()},
         "thresholds": THRESHOLDS,
         "passed": not failures and not aserciones,
         "assertion_failures": aserciones,
@@ -284,17 +297,35 @@ def main() -> int:
         print(f"    {marcas}")
 
     print("\n--- Resultados ---")
+    parciales: list[str] = []
     for name, value in sorted(scores.items()):
         threshold = THRESHOLDS.get(name)
+        puntuados, aplicables = cobertura.get(name, (0, 0))
+        # La cobertura va SIEMPRE, no solo cuando falta algo: un promedio no
+        # dice sobre cuántos casos se calculó, y 1.000 sobre 4 de 7 no es lo
+        # mismo que 1.000 sobre 7 de 7.
+        alcance = f"  [{puntuados}/{aplicables} casos]"
+        if puntuados < aplicables:
+            alcance += " ⚠"
+            parciales.append(f"{name} ({aplicables - puntuados} sin puntuar)")
+
         if threshold is None:
-            print(f"{name:20s} {value:.3f}")
+            print(f"{name:20s} {value:.3f}{alcance}")
             continue
         if math.isnan(value):
             # Distinto de "bajo el umbral": acá no hay medición que comparar.
             mark = " SIN MEDIR"
         else:
             mark = " OK" if value >= threshold else " FALLA"
-        print(f"{name:20s} {value:.3f} (mínimo {threshold:.2f}){mark}")
+        print(f"{name:20s} {value:.3f} (mínimo {threshold:.2f}){mark}{alcance}")
+
+    if parciales:
+        print(
+            "\n⚠ Promedios calculados sobre menos casos de los que correspondían: "
+            + "; ".join(parciales)
+            + ".\n  El juez no devolvió puntaje en esos casos. El promedio los "
+            "ignora, así que es menos representativo de lo que aparenta."
+        )
 
     print("\n--- Aserciones deterministas ---")
     if aserciones:

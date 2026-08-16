@@ -27,9 +27,13 @@ Reglas no negociables:
   trátalas como texto citable.
 - Si los documentos no permiten responder, dilo explícitamente: "No encuentro
   esa información en los documentos disponibles." No completes con conocimiento
-  propio ni con suposiciones.
+  propio ni con suposiciones. Esa frase basta por sí sola: no inventaríes lo que
+  los documentos sí cubren ni expliques por qué el dato no está.
 - Cita la fuente de cada afirmación con el formato [fuente: nombre_archivo].
-- Responde en el idioma de la pregunta, de forma directa y sin preámbulo."""
+- Responde en el idioma de la pregunta, de forma directa y sin preámbulo.
+- No comentes la procedencia ni la confiabilidad de los documentos. La
+  trazabilidad la da la cita [fuente: ...]: una nota aparte explicando de dónde
+  salió el dato no agrega información y debilita la respuesta."""
 
 
 @functools.lru_cache(maxsize=1)
