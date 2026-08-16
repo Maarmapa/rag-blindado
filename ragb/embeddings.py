@@ -26,18 +26,44 @@ def _model():
     return SentenceTransformer(settings.embedding_model)
 
 
-def embed(texts: list[str]) -> list[list[float]]:
-    """Vectoriza una lista de textos. Normaliza para usar distancia coseno."""
+def _prefix(kind: str) -> str:
+    """Prefijo que la familia E5 espera para distinguir pregunta de documento.
+
+    E5 se entrenó con "query: " y "passage: " delante del texto, y omitirlos
+    degrada la recuperación en silencio: no falla, solo recupera peor. Se
+    aplica concatenando texto y no con el parámetro `prompt` de `encode()`,
+    para no depender de la firma de una versión concreta de
+    sentence-transformers.
+
+    Cualquier otro modelo va sin prefijo: en un modelo que no lo espera, es
+    ruido que empeora el vector.
+    """
+    if "e5" not in settings.embedding_model.lower():
+        return ""
+    return f"{kind}: "
+
+
+def embed(texts: list[str], *, kind: str = "passage") -> list[list[float]]:
+    """Vectoriza una lista de textos. Normaliza para usar distancia coseno.
+
+    `kind` distingue un documento indexado ("passage") de una pregunta
+    ("query"). El default es "passage" porque la ingesta es quien llama en
+    volumen; las preguntas entran por `embed_one`.
+    """
     if not texts:
         return []
+    prefix = _prefix(kind)
     vectors = _model().encode(
-        texts, normalize_embeddings=True, show_progress_bar=False
+        [prefix + t for t in texts] if prefix else texts,
+        normalize_embeddings=True,
+        show_progress_bar=False,
     )
     return [v.tolist() for v in vectors]
 
 
 def embed_one(text: str) -> list[float]:
-    return embed([text])[0]
+    """Vectoriza una pregunta: es el lado 'query' de la búsqueda."""
+    return embed([text], kind="query")[0]
 
 
 def dimension() -> int:

@@ -60,7 +60,11 @@ es alto; capaz donde importa la respuesta.
 
 El corpus de demo incluye `corpus/nota-proveedor.md`, un documento con una
 inyección real incrustada entre datos legítimos. El pipeline responde el dato
-correcto (el horario de soporte) y pone el fragmento malicioso en cuarentena.
+correcto (el horario de soporte) y pone en cuarentena **el párrafo** con la
+instrucción, no el documento entero: descartar el fragmento completo se llevaría
+por delante el plazo de pago y el horario de soporte, que son legítimos. La
+escisión falla cerrado — si un patrón calza cruzando el corte entre párrafos,
+sacar párrafos no lo neutralizaría, así que se descarta todo.
 
 ## Evaluación en CI
 
@@ -77,6 +81,21 @@ Tres métricas sobre un dataset dorado (`evals/dataset.yaml`), calculadas con
 workflow de GitHub Actions corre los tests de guardas en **todo** push (sin
 credenciales, sin costo) y las evals completas contra un Postgres con pgvector
 levantado como servicio.
+
+Una métrica que no se pudo calcular **no aprueba**. Parece obvio, pero en Python
+`nan` pierde todas las comparaciones —`nan < 0.85` es falso y `nan >= 0.85`
+también—, así que una barrera escrita con una sola comparación se abre sola
+justo cuando el juez falla. Acá un `nan` se reporta como `SIN MEDIR` y rechaza
+el build.
+
+Además de las tres métricas hay **aserciones deterministas**, sin juez y sin
+costo: que el control negativo se niegue de verdad a responder lo que el corpus
+no contiene, que la respuesta al documento con la inyección no traiga el system
+prompt, y que ninguna respuesta contenga credenciales. Un caso marcado
+`expects_refusal` queda fuera de `answer_relevancy` y `context_precision` —las
+dos puntúan cerca de cero una negativa correcta, por diseño de la métrica— y se
+verifica con esa aserción, que es más exigente: si el pipeline se inventara una
+respuesta, el build falla aunque las tres métricas estén en verde.
 
 ## Uso
 

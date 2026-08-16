@@ -11,8 +11,20 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+    # Multilingüe a propósito: el corpus y las preguntas están en español, y el
+    # anterior (all-MiniLM-L6-v2) declara un solo idioma, `en`. Con él, una
+    # respuesta exacta —"1 hora" a "¿cuál es el plazo de severidad 1?"— sacaba
+    # 0.312 de answer_relevancy. Eso medía un modelo fuera de su idioma, no la
+    # calidad de la respuesta.
+    #
+    # Se prefirió e5-small sobre paraphrase-multilingual-MiniLM-L12-v2 por el
+    # límite de secuencia: 512 tokens contra 128. Con 128, la mitad de cada
+    # fragmento de 900 caracteres se truncaría en silencio.
+    #
+    # Misma dimensión que el anterior (384): el esquema no cambia. El espacio
+    # vectorial sí, así que una base ya indexada hay que re-indexarla.
     embedding_model: str = os.getenv(
-        "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        "EMBEDDING_MODEL", "intfloat/multilingual-e5-small"
     )
     generation_model: str = os.getenv("GENERATION_MODEL", "claude-opus-5")
     judge_model: str = os.getenv("JUDGE_MODEL", "claude-opus-5")
