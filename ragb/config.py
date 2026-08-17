@@ -29,6 +29,20 @@ class Settings:
     generation_model: str = os.getenv("GENERATION_MODEL", "claude-opus-5")
     judge_model: str = os.getenv("JUDGE_MODEL", "claude-opus-5")
 
+    # Juez aparte solo para `faithfulness`. Vacío = usar `judge_model`.
+    #
+    # Esa métrica es una razón sobre pocas afirmaciones, así que en respuestas
+    # cortas un error del juez cuesta un tercio del puntaje. Medido con Haiku:
+    # una respuesta que cita el documento casi palabra por palabra —"las
+    # credenciales se gestionan exclusivamente mediante variables de entorno y
+    # bóveda de secretos", contra "…exclusivamente por variables de entorno y
+    # bóveda de secretos" en el corpus— sacaba 0.667. No había nada que
+    # recortar: era error de medición.
+    #
+    # Las otras dos métricas no mostraron ese problema, así que el modelo caro
+    # se paga solo donde se demostró que hace falta.
+    faithfulness_judge_model: str = os.getenv("FAITHFULNESS_JUDGE_MODEL", "")
+
     collection: str = os.getenv("COLLECTION", "default")
     top_k: int = int(os.getenv("TOP_K", "5"))
     chunk_chars: int = int(os.getenv("CHUNK_CHARS", "900"))

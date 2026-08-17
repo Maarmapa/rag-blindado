@@ -38,9 +38,20 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ragb
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      # El juez de Ragas hace la mayor parte de las llamadas de este job y no
-      # necesita el modelo más caro para calificar relevancia y fidelidad.
+      # El juez de Ragas hace ~90% de las llamadas de este job (unas 56 sobre
+      # ocho casos), así que el modelo elegido acá es el costo recurrente del
+      # repo: cada push a cualquier PR vuelve a correr esto.
+      #
+      # Haiku califica bien relevancia y precisión de contexto. Para fidelidad
+      # no: es una razón sobre pocas afirmaciones, y en respuestas cortas un
+      # error del juez cuesta un tercio del puntaje. Con Haiku, cuatro
+      # respuestas que citaban el corpus casi textualmente sacaron entre 0.667
+      # y 0.833 sin tener nada inventado que recortar.
+      #
+      # Así que el modelo caro se paga solo en la métrica que lo necesita:
+      # 16 llamadas de 56, no las 56.
       JUDGE_MODEL: claude-haiku-4-5
+      FAITHFULNESS_JUDGE_MODEL: claude-sonnet-5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

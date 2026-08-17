@@ -99,12 +99,29 @@ def score(rows: list[dict]) -> list[dict]:
     )
     from ragas.run_config import RunConfig
 
-    judge = LangchainLLMWrapper(
-        ChatAnthropic(
-            model=settings.judge_model,
-            api_key=settings.require_anthropic(),
-            max_tokens=2048,
+    def construir_juez(model: str):
+        # max_tokens holgado a propósito: si el modelo razona antes de
+        # responder, ese presupuesto sale del mismo tope, y un juez truncado no
+        # devuelve un puntaje bajo — devuelve `nan`. Los tokens no gastados no
+        # se cobran, así que el margen es gratis.
+        return LangchainLLMWrapper(
+            ChatAnthropic(
+                model=model,
+                api_key=settings.require_anthropic(),
+                max_tokens=4096,
+            )
         )
+
+    judge = construir_juez(settings.judge_model)
+    faithfulness_model = settings.faithfulness_judge_model or settings.judge_model
+    judge_faithfulness = (
+        judge if faithfulness_model == settings.judge_model
+        else construir_juez(faithfulness_model)
+    )
+    print(
+        f"Jueces: {faithfulness_model} para faithfulness · "
+        f"{settings.judge_model} para el resto",
+        file=sys.stderr,
     )
 
     from ragas.embeddings import LangchainEmbeddingsWrapper
@@ -123,7 +140,7 @@ def score(rows: list[dict]) -> list[dict]:
     report = evaluate(
         dataset=EvaluationDataset.from_list(rows),
         metrics=[
-            Faithfulness(llm=judge),
+            Faithfulness(llm=judge_faithfulness),
             AnswerRelevancy(llm=judge, embeddings=judge_embeddings),
             ContextPrecision(llm=judge),
         ],
@@ -137,8 +154,21 @@ def score(rows: list[dict]) -> list[dict]:
 REFUSAL_MARKER = "No encuentro esa información en los documentos disponibles"
 
 # Métricas que no se le pueden exigir a un caso cuya respuesta correcta es
-# negarse: ambas puntúan cerca de cero una negativa, por diseño de Ragas.
-SKIP_ON_REFUSAL = ("answer_relevancy", "context_precision")
+# negarse. Las tres, y cada una por su motivo:
+#
+#   answer_relevancy   Ragas puntúa cerca de cero toda respuesta evasiva.
+#   context_precision  no hay contexto relevante que recuperar: esa es la
+#                      premisa del caso.
+#   faithfulness       es una razón de afirmaciones sostenidas sobre
+#                      afirmaciones totales, y una negativa no contiene
+#                      afirmaciones que anclar al contexto. Medido: al acortar
+#                      la negativa a su frase canónica, el caso pasó de 0.545
+#                      a 0.000. No mejoró ni empeoró la respuesta; simplemente
+#                      no hay nada que la métrica pueda calificar.
+#
+# Estos casos no quedan sin verificar: los cubre `verificar_aserciones`, que es
+# más estricta que las tres métricas juntas para lo que se les pide.
+SKIP_ON_REFUSAL = ("answer_relevancy", "context_precision", "faithfulness")
 
 
 def verificar_aserciones(traces: list[dict]) -> list[str]:
