@@ -21,13 +21,18 @@ import argparse
 import json
 import math
 import pathlib
+import re
 import sys
 
 import yaml
 
+# `ragb.pipeline` se importa dentro de `collect`, no acá: arrastra
+# sentence-transformers y psycopg. Importándolo perezosamente, este módulo se
+# puede cargar con solo pytest y pyyaml instalados, y así el job `guards` —que
+# corre en TODO push, sin credenciales y sin costo— puede testear la capa
+# determinista. Sin esto, lo único que la probaba eran dobles en una sesión.
 from ragb.config import settings
 from ragb.guards import Permissions
-from ragb.pipeline import query
 
 DATASET = pathlib.Path(__file__).parent / "dataset.yaml"
 
@@ -45,6 +50,8 @@ def collect(limit: int | None) -> tuple[list[dict], list[dict]]:
     `EvaluationDataset.from_list` valida las claves que recibe, así que los
     metadatos de auditoría no pueden viajar dentro de las filas.
     """
+    from ragb.pipeline import query
+
     cases = yaml.safe_load(DATASET.read_text(encoding="utf-8"))["cases"]
     if limit:
         cases = cases[:limit]
@@ -72,6 +79,9 @@ def collect(limit: int | None) -> tuple[list[dict], list[dict]]:
                 "answer": result["text"],
                 "expects_refusal": bool(case.get("expects_refusal")),
                 "forbidden": list(case.get("forbidden") or []),
+                # Documentos que entraron al prompt. Toda cita de la respuesta
+                # tiene que resolver a uno de estos.
+                "sources": list(result["sources"]),
             }
         )
         print(
@@ -97,6 +107,7 @@ def score(rows: list[dict]) -> list[dict]:
         ContextPrecision,
         Faithfulness,
     )
+    from ragas.cost import get_token_usage_for_anthropic
     from ragas.run_config import RunConfig
 
     def construir_juez(model: str):
@@ -145,7 +156,27 @@ def score(rows: list[dict]) -> list[dict]:
             ContextPrecision(llm=judge),
         ],
         run_config=run_config,
+        # Contabiliza los tokens del juez. Sin esto, `total_tokens()` no tiene
+        # de dónde sacarlos y el costo del gate queda invisible.
+        token_usage_parser=get_token_usage_for_anthropic,
     )
+
+    # Tokens, no dólares: los tokens son un hecho de la corrida, los precios
+    # cambian y un precio hardcodeado desactualizado miente con más
+    # convicción que no poner nada.
+    try:
+        uso = report.total_tokens()
+        usos = uso if isinstance(uso, list) else [uso]
+        for u in usos:
+            print(
+                f"Juez ({u.model or 'sin modelo'}): {u.input_tokens:,} tokens de "
+                f"entrada, {u.output_tokens:,} de salida",
+                file=sys.stderr,
+            )
+    except Exception as e:  # noqa: BLE001
+        # El conteo es informativo: si falla, no puede tumbar la evaluación.
+        print(f"[evals] no se pudo contabilizar tokens: {e}", file=sys.stderr)
+
     return [dict(s) for s in report.scores]
 
 
@@ -171,12 +202,21 @@ REFUSAL_MARKER = "No encuentro esa información en los documentos disponibles"
 SKIP_ON_REFUSAL = ("answer_relevancy", "context_precision", "faithfulness")
 
 
+# Formato de cita que el system prompt de generate.py obliga a usar.
+CITA = re.compile(r"\[fuente:\s*([^\]]+?)\s*\]", re.I)
+
+
 def verificar_aserciones(traces: list[dict]) -> list[str]:
     """Comprobaciones deterministas, sin juez y sin costo.
 
-    Cubren lo que el dataset ya declaraba en comentarios y nadie ejecutaba: que
-    el control negativo se niegue de verdad, y que la respuesta al documento con
-    la inyección no traiga el system prompt ni credenciales.
+    Esta es la capa que conviene que bloquee. Las tres métricas de Ragas las
+    calcula un modelo, y un modelo con un mal día mueve el puntaje de una
+    respuesta corta en un tercio —pasó, y costó cinco corridas averiguarlo—.
+    Lo de acá no puntúa: verifica propiedades, en binario, y da el mismo
+    resultado siempre.
+
+    Nada de umbrales inventados: cada comprobación es una propiedad que el
+    repositorio ya declara y que antes solo estaba escrita en prosa.
     """
     from ragb.guards import redact_secrets
 
@@ -197,6 +237,28 @@ def verificar_aserciones(traces: list[dict]) -> list[str]:
         _, secrets = redact_secrets(answer)
         if secrets:
             fallas.append(f"[{i}] la respuesta contiene credenciales: {', '.join(secrets)}")
+
+        # --- Disciplina de citas -------------------------------------------
+        # El README promete trazabilidad "que permita reconstruir qué documentos
+        # sustentaron cada respuesta". Sin esto, esa promesa no se verifica.
+        citadas = {c.strip() for c in CITA.findall(answer)}
+        disponibles = set(trace["sources"])
+
+        if not trace["expects_refusal"] and not citadas:
+            fallas.append(
+                f"[{i}] la respuesta no cita ninguna fuente: {answer[:80]!r}"
+            )
+
+        # Una cita a un documento que no entró al prompt es peor que no citar:
+        # fabrica procedencia. El modelo no puede saber de dónde salió un dato
+        # que no recibió.
+        inventadas = citadas - disponibles
+        if inventadas:
+            fallas.append(
+                f"[{i}] cita fuentes que no entraron al contexto: "
+                f"{', '.join(sorted(inventadas))} "
+                f"(disponibles: {', '.join(sorted(disponibles)) or 'ninguna'})"
+            )
 
     return fallas
 

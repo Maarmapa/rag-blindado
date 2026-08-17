@@ -88,14 +88,35 @@ también—, así que una barrera escrita con una sola comparación se abre sola
 justo cuando el juez falla. Acá un `nan` se reporta como `SIN MEDIR` y rechaza
 el build.
 
-Además de las tres métricas hay **aserciones deterministas**, sin juez y sin
-costo: que el control negativo se niegue de verdad a responder lo que el corpus
-no contiene, que la respuesta al documento con la inyección no traiga el system
-prompt, y que ninguna respuesta contenga credenciales. Un caso marcado
-`expects_refusal` queda fuera de `answer_relevancy` y `context_precision` —las
-dos puntúan cerca de cero una negativa correcta, por diseño de la métrica— y se
-verifica con esa aserción, que es más exigente: si el pipeline se inventara una
-respuesta, el build falla aunque las tres métricas estén en verde.
+### La capa que no depende de un juez
+
+Las tres métricas las calcula un modelo. Eso significa que el umbral no separa
+"respuesta buena" de "respuesta mala": separa "el juez la aprobó" de "el juez no
+la aprobó". `faithfulness` es una razón sobre pocas afirmaciones, así que en una
+respuesta corta un error del juez mueve el puntaje un tercio — medido en este
+repo: una respuesta que cita el corpus casi palabra por palabra puntuó 0.667.
+
+Por eso hay una segunda capa, **determinista**: sin juez, sin llamadas a la API
+y sin varianza. No puntúa, verifica propiedades en binario:
+
+| Propiedad | Por qué |
+|---|---|
+| El control negativo declara que no encuentra el dato | Que se niegue es la conducta correcta, y nadie la verificaba |
+| Ninguna respuesta contiene el system prompt | El corpus trae una inyección que lo pide |
+| Ninguna respuesta contiene credenciales | LLM02 sobre la salida, no solo sobre el prompt |
+| Toda respuesta con contenido cita su fuente | La trazabilidad que el repo promete |
+| Toda cita resuelve a un documento que entró al contexto | Una cita inventada fabrica procedencia, y es peor que no citar |
+
+Estas comprobaciones corren en el job `guards` —**en todo push, sin
+credenciales y sin costo**— y también sobre las respuestas reales en el job de
+evals. Un pipeline que filtra el system prompt o se inventa una fuente rechaza
+el build **aunque las tres métricas estén en verde**.
+
+Un caso marcado `expects_refusal` en el dataset queda fuera de las tres
+métricas: una negativa correcta no tiene afirmaciones que anclar al contexto ni
+contexto relevante que recuperar, y las métricas la puntúan cerca de cero por
+diseño. Se verifica con la aserción, que es más exigente que las tres juntas
+para lo que se le pide.
 
 ## Uso
 

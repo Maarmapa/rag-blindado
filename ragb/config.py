@@ -41,6 +41,11 @@ class Settings:
     #
     # Las otras dos métricas no mostraron ese problema, así que el modelo caro
     # se paga solo donde se demostró que hace falta.
+    #
+    # ⚠ Ojo al usarla: Ragas fija `temperature` en cada llamada al juez, y hay
+    # modelos que rechazan ese parámetro con 400. Con claude-sonnet-5 los ocho
+    # jobs de fidelidad fallaron y la métrica quedó sin medir. La salida es
+    # `LangchainLLMWrapper(..., bypass_temperature=True)`.
     faithfulness_judge_model: str = os.getenv("FAITHFULNESS_JUDGE_MODEL", "")
 
     collection: str = os.getenv("COLLECTION", "default")
