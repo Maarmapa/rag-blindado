@@ -59,7 +59,13 @@ jobs:
       # como trabajo aparte: subir el juez es una decisión de costo recurrente
       # —cada push a cualquier PR corre este job— y merece medirse antes, no
       # cambiarse a ciegas.
-      JUDGE_MODEL: claude-haiku-4-5
+      # Versión fija, no el alias. El alias resuelve a una versión concreta que
+      # puede cambiar sin que nadie toque este archivo, y con ella se movería el
+      # puntaje de un gate que bloquea merges. Se comprobó que este juez es
+      # CONSISTENTE —cinco casos dieron el mismo puntaje en tres corridas
+      # independientes—, así que fijarlo hace la evaluación reproducible de
+      # verdad; con el alias, esa consistencia dura hasta el próximo release.
+      JUDGE_MODEL: claude-haiku-4-5-20251001
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

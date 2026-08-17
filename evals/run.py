@@ -91,13 +91,55 @@ def collect(limit: int | None) -> tuple[list[dict], list[dict]]:
     return rows, traces
 
 
-def score(rows: list[dict]) -> list[dict]:
+def extraer_traza_juez(report, metrica: str) -> list[dict]:
+    """Rescata el razonamiento interno del juez, que Ragas calcula y descarta.
+
+    Para `faithfulness`, Ragas hace dos llamadas por caso: primero parte la
+    respuesta en afirmaciones atómicas, después pregunta una por una si el
+    contexto las sostiene. El puntaje es la razón entre aprobadas y totales —de
+    ahí que un 0.667 sea "2 de 3"— pero cuál fue la tercera no se guarda en
+    ninguna parte, y sin eso un umbral que no se alcanza es indistinguible de
+    un juez que se equivoca.
+
+    Cuesta cero llamadas extra: el dato ya se produjo. Solo se estaba tirando.
+
+    Se guarda únicamente la SALIDA de cada llamada. La entrada es el prompt
+    completo con todos los contextos, que ya está en el reporte por otro lado
+    y multiplicaría el tamaño del artifact sin agregar nada.
+    """
+    salida: list[dict] = []
+    for traza_caso in getattr(report, "traces", []) or []:
+        por_prompt = (traza_caso or {}).get(metrica, {}) or {}
+        salida.append(
+            {
+                nombre: _serializable(datos.get("output"))
+                for nombre, datos in por_prompt.items()
+            }
+        )
+    return salida
+
+
+def _serializable(valor):
+    """Los objetos de Ragas son modelos Pydantic; el reporte es JSON."""
+    if hasattr(valor, "model_dump"):
+        return valor.model_dump()
+    if isinstance(valor, dict):
+        return {k: _serializable(v) for k, v in valor.items()}
+    if isinstance(valor, list):
+        return [_serializable(v) for v in valor]
+    if isinstance(valor, (str, int, float, bool)) or valor is None:
+        return valor
+    return str(valor)
+
+
+def score(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     """Puntúa con Ragas. Claude actúa como juez de las métricas.
 
-    Devuelve el puntaje POR CASO, no el promedio: el promedio se calcula en
-    `agregar`, que sabe qué casos entran en qué métrica. El detalle por caso es
-    además lo que permite distinguir "el pipeline respondió mal" de "el juez no
-    pudo calificar" — en un promedio las dos cosas se ven igual.
+    Devuelve (puntaje por caso, traza del juez de faithfulness). El promedio no
+    se calcula acá: eso lo hace `agregar`, que sabe qué casos entran en qué
+    métrica. El detalle por caso es además lo que permite distinguir "el
+    pipeline respondió mal" de "el juez no pudo calificar" — en un promedio las
+    dos cosas se ven igual.
     """
     from langchain_anthropic import ChatAnthropic
     from ragas import EvaluationDataset, evaluate
@@ -177,7 +219,14 @@ def score(rows: list[dict]) -> list[dict]:
         # El conteo es informativo: si falla, no puede tumbar la evaluación.
         print(f"[evals] no se pudo contabilizar tokens: {e}", file=sys.stderr)
 
-    return [dict(s) for s in report.scores]
+    try:
+        traza = extraer_traza_juez(report, "faithfulness")
+    except Exception as e:  # noqa: BLE001
+        # Diagnóstico, no resultado: si falla, no puede tumbar la evaluación.
+        print(f"[evals] no se pudo extraer la traza del juez: {e}", file=sys.stderr)
+        traza = []
+
+    return [dict(s) for s in report.scores], traza
 
 
 # Frase exacta que el system prompt de generate.py obliga a usar cuando el
@@ -342,7 +391,7 @@ def main() -> int:
         return 1
 
     print("Puntuando con Ragas…", file=sys.stderr)
-    per_case = score(rows)
+    per_case, traza_juez = score(rows)
 
     # Agregación propia: los casos negativos salen de las métricas que no
     # saben calificarlos y se verifican con `verificar_aserciones`.
@@ -362,7 +411,14 @@ def main() -> int:
         "passed": not failures and not aserciones,
         "assertion_failures": aserciones,
         "cases": [
-            {**trace, "scores": per_case[i] if i < len(per_case) else {}}
+            {
+                **trace,
+                "scores": per_case[i] if i < len(per_case) else {},
+                # Afirmaciones que el juez extrajo y su veredicto sobre cada
+                # una. Es lo que convierte un 0.667 de dato opaco en algo
+                # revisable: sin esto, "2 de 3" no dice cuál fue la tercera.
+                "faithfulness_trace": traza_juez[i] if i < len(traza_juez) else {},
+            }
             for i, trace in enumerate(traces)
         ],
     }
@@ -387,6 +443,15 @@ def main() -> int:
         print(f"    P: {trace['question'][:96]}")
         print(f"    R: {trace['answer'][:96]}")
         print(f"    {marcas}")
+
+        # El razonamiento del juez de fidelidad, para poder revisar un 0.667 en
+        # vez de especular con él. Va al log además del artifact: el artifact no
+        # siempre se puede descargar.
+        for nombre, salida in (
+            traza_juez[i] if i < len(traza_juez) else {}
+        ).items():
+            texto = json.dumps(salida, ensure_ascii=False)
+            print(f"    juez·{nombre}: {texto[:400]}")
 
     print("\n--- Resultados ---")
     parciales: list[str] = []

@@ -8,6 +8,7 @@ el build pasa tiene que poder verificarse sin depender de un juez.
 archivo pueda cargarlo con solo pytest y pyyaml instalados.
 """
 
+import json
 import math
 import pathlib
 import sys
@@ -20,6 +21,7 @@ from evals.run import (  # noqa: E402
     REFUSAL_MARKER,
     SKIP_ON_REFUSAL,
     agregar,
+    extraer_traza_juez,
     reprueba,
     verificar_aserciones,
 )
@@ -149,6 +151,56 @@ def test_una_cita_inventada_es_peor_que_no_citar():
     fallas = verificar_aserciones([inventada])
     assert any("no entraron al contexto" in f for f in fallas)
     assert any("contrato-que-no-existe.md" in f for f in fallas)
+
+
+# --- Traza del juez ----------------------------------------------------------
+
+class ReporteFalso:
+    def __init__(self, traces):
+        self.traces = traces
+
+
+class SalidaPydantic:
+    """Imita un modelo de Ragas: la traza real trae objetos, no diccionarios."""
+
+    def model_dump(self):
+        return {"statements": [{"statement": "x", "verdict": 0}]}
+
+
+def test_extrae_solo_la_metrica_pedida_y_solo_la_salida():
+    """La entrada es el prompt entero con todos los contextos: no se guarda."""
+    reporte = ReporteFalso(
+        [
+            {
+                "faithfulness": {
+                    "nli": {"input": {"prompt": "…gigante…"}, "output": {"v": 1}}
+                },
+                "answer_relevancy": {"otro": {"input": {}, "output": {"v": 9}}},
+            }
+        ]
+    )
+
+    traza = extraer_traza_juez(reporte, "faithfulness")
+
+    assert traza == [{"nli": {"v": 1}}]
+    assert "answer_relevancy" not in str(traza)
+    assert "gigante" not in str(traza), "se coló el prompt de entrada"
+
+
+def test_la_traza_serializa_objetos_no_json():
+    reporte = ReporteFalso([{"faithfulness": {"nli": {"output": SalidaPydantic()}}}])
+
+    traza = extraer_traza_juez(reporte, "faithfulness")
+
+    assert traza[0]["nli"] == {"statements": [{"statement": "x", "verdict": 0}]}
+    json.dumps(traza)  # tiene que poder escribirse al reporte
+
+
+def test_sin_trazas_no_revienta():
+    """Es diagnóstico: su ausencia no puede tumbar una evaluación."""
+    assert extraer_traza_juez(ReporteFalso([]), "faithfulness") == []
+    assert extraer_traza_juez(ReporteFalso(None), "faithfulness") == []
+    assert extraer_traza_juez(ReporteFalso([{}]), "faithfulness") == [{}]
 
 
 def test_la_cita_se_reconoce_con_espacios_y_mayusculas():
