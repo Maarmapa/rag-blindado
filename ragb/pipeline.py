@@ -74,5 +74,20 @@ def query(
             {"source": q["source"], "reason": q["quarantine_reason"]}
             for q in quarantined
         ],
-        "contexts": [c["text"] for c in accepted],
+        # El fragmento va CON su fuente, igual que lo recibe el modelo dentro
+        # de <documento fuente="…"> en generate.build_context.
+        #
+        # Antes viajaba como texto pelado, y eso rompía la evaluación de forma
+        # silenciosa: el juez de fidelidad extrae "la fuente de este dato es
+        # nota-proveedor.md" como una afirmación más de la respuesta y la
+        # marcaba como no sostenida, porque el nombre del archivo no aparecía
+        # por ningún lado en lo que le mostrábamos. Medido: dos casos con
+        # respuestas correctas y citadas quedaron clavados en 0.667 (2 de 3)
+        # durante cuatro corridas por esta única razón.
+        #
+        # El juez tenía razón: la culpa era de mostrarle menos contexto del que
+        # tuvo el modelo. Y de paso la traza de auditoría ahora dice de qué
+        # documento salió cada fragmento, que es lo que el README promete poder
+        # reconstruir.
+        "contexts": [f"[fuente: {c['source']}]\n{c['text']}" for c in accepted],
     }

@@ -1,14 +1,44 @@
 """Evaluación automatizada de calidad del RAG, integrable a CI/CD.
 
-Mide tres dimensiones sobre un dataset dorado (evals/dataset.yaml):
+Mide sobre un dataset dorado (evals/dataset.yaml):
 
   faithfulness      ¿cada afirmación de la respuesta se sostiene en el contexto?
   answer_relevancy  ¿la respuesta contesta la pregunta que se hizo?
   context_precision ¿lo recuperado era efectivamente relevante?
+  context_recall    ¿se recuperó todo lo relevante? (aún sin umbral: ver abajo)
 
-Las tres se calculan con Ragas usando Claude como modelo juez. El script
-termina con exit code 1 si alguna métrica cae bajo el umbral configurado,
-para que un pull request que degrada la calidad no pueda mergearse.
+Se calculan con Ragas usando Claude como modelo juez. El script termina con
+exit code 1 si alguna métrica con umbral cae bajo él, para que un pull request
+que degrada la calidad no pueda mergearse.
+
+Sobre las métricas de juez hay una segunda capa, `verificar_aserciones`, que no
+puntúa: verifica propiedades en binario, sin juez y sin costo. Esa es la que
+conviene mirar primero cuando algo falla, porque no tiene margen de error.
+
+Artefactos conocidos de la medición
+-----------------------------------
+Un puntaje bajo NO siempre es una respuesta mala. Casos documentados en este
+repositorio, para no re-investigarlos desde cero:
+
+  · Una negativa correcta ("no encuentro esa información") puntúa cerca de cero
+    en answer_relevancy y context_precision por diseño de Ragas, y no tiene
+    afirmaciones que anclar para faithfulness. Por eso los casos marcados
+    `expects_refusal` salen de las tres (ver SKIP_ON_REFUSAL).
+
+  · El juez descompone la respuesta en afirmaciones atómicas antes de
+    calificarlas, y esa descomposición puede romper una frase correcta. Medido:
+    "las credenciales se gestionan exclusivamente mediante variables de entorno
+    y bóveda de secretos" —textual del corpus— se parte en dos afirmaciones,
+    "exclusivamente mediante variables de entorno" y "exclusivamente mediante
+    bóveda de secretos", y cada una contradice el contexto por separado. El
+    juez lo explica así: "the word 'exclusively' contradicts the context which
+    mentions two methods, not one alone". La respuesta es fiel; la
+    descomposición no. No se reescribe la respuesta para complacer al juez.
+
+  · faithfulness es una razón sobre pocas afirmaciones, así que en respuestas
+    cortas un desacuerdo cuesta un tercio del puntaje. Con 7 casos, además, uno
+    solo vale el 14% del promedio. Ambas cosas se arreglan con un dataset más
+    grande, no con umbrales más bajos.
 
 Uso:
     python -m evals.run                 # dataset completo
@@ -36,6 +66,16 @@ from ragb.guards import Permissions
 
 DATASET = pathlib.Path(__file__).parent / "dataset.yaml"
 
+# `context_recall` NO lleva umbral todavía, y es deliberado. Precisión sin
+# recall es la mitad tranquilizadora de la medición: dice que lo que
+# recuperamos era relevante, no que hayamos recuperado todo lo relevante. Un
+# sistema que encuentra 1 de los 4 fragmentos que necesita saca precisión
+# perfecta.
+#
+# Se mide primero y se le pone umbral después, cuando haya distribución
+# observada que lo justifique. Inventar el número antes de tener el dato es
+# justo el error que costó varias corridas en este repositorio: el umbral no
+# sale de la intuición, sale de lo medido.
 THRESHOLDS = {
     "faithfulness": settings.min_faithfulness,
     "answer_relevancy": settings.min_answer_relevancy,
@@ -147,6 +187,7 @@ def score(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     from ragas.metrics import (
         AnswerRelevancy,
         ContextPrecision,
+        ContextRecall,
         Faithfulness,
     )
     from ragas.cost import get_token_usage_for_anthropic
@@ -196,6 +237,8 @@ def score(rows: list[dict]) -> tuple[list[dict], list[dict]]:
             Faithfulness(llm=judge_faithfulness),
             AnswerRelevancy(llm=judge, embeddings=judge_embeddings),
             ContextPrecision(llm=judge),
+            # Sin umbral todavía, a propósito: ver THRESHOLDS.
+            ContextRecall(llm=judge),
         ],
         run_config=run_config,
         # Contabiliza los tokens del juez. Sin esto, `total_tokens()` no tiene
