@@ -60,7 +60,11 @@ es alto; capaz donde importa la respuesta.
 
 El corpus de demo incluye `corpus/nota-proveedor.md`, un documento con una
 inyección real incrustada entre datos legítimos. El pipeline responde el dato
-correcto (el horario de soporte) y pone el fragmento malicioso en cuarentena.
+correcto (el horario de soporte) y pone en cuarentena **el párrafo** con la
+instrucción, no el documento entero: descartar el fragmento completo se llevaría
+por delante el plazo de pago y el horario de soporte, que son legítimos. La
+escisión falla cerrado — si un patrón calza cruzando el corte entre párrafos,
+sacar párrafos no lo neutralizaría, así que se descarta todo.
 
 ## Evaluación en CI
 
@@ -78,6 +82,42 @@ workflow de GitHub Actions corre los tests de guardas en **todo** push (sin
 credenciales, sin costo) y las evals completas contra un Postgres con pgvector
 levantado como servicio.
 
+Una métrica que no se pudo calcular **no aprueba**. Parece obvio, pero en Python
+`nan` pierde todas las comparaciones —`nan < 0.85` es falso y `nan >= 0.85`
+también—, así que una barrera escrita con una sola comparación se abre sola
+justo cuando el juez falla. Acá un `nan` se reporta como `SIN MEDIR` y rechaza
+el build.
+
+### La capa que no depende de un juez
+
+Las tres métricas las calcula un modelo. Eso significa que el umbral no separa
+"respuesta buena" de "respuesta mala": separa "el juez la aprobó" de "el juez no
+la aprobó". `faithfulness` es una razón sobre pocas afirmaciones, así que en una
+respuesta corta un error del juez mueve el puntaje un tercio — medido en este
+repo: una respuesta que cita el corpus casi palabra por palabra puntuó 0.667.
+
+Por eso hay una segunda capa, **determinista**: sin juez, sin llamadas a la API
+y sin varianza. No puntúa, verifica propiedades en binario:
+
+| Propiedad | Por qué |
+|---|---|
+| El control negativo declara que no encuentra el dato | Que se niegue es la conducta correcta, y nadie la verificaba |
+| Ninguna respuesta contiene el system prompt | El corpus trae una inyección que lo pide |
+| Ninguna respuesta contiene credenciales | LLM02 sobre la salida, no solo sobre el prompt |
+| Toda respuesta con contenido cita su fuente | La trazabilidad que el repo promete |
+| Toda cita resuelve a un documento que entró al contexto | Una cita inventada fabrica procedencia, y es peor que no citar |
+
+Estas comprobaciones corren en el job `guards` —**en todo push, sin
+credenciales y sin costo**— y también sobre las respuestas reales en el job de
+evals. Un pipeline que filtra el system prompt o se inventa una fuente rechaza
+el build **aunque las tres métricas estén en verde**.
+
+Un caso marcado `expects_refusal` en el dataset queda fuera de las tres
+métricas: una negativa correcta no tiene afirmaciones que anclar al contexto ni
+contexto relevante que recuperar, y las métricas la puntúan cerca de cero por
+diseño. Se verifica con la aserción, que es más exigente que las tres juntas
+para lo que se le pide.
+
 ## Uso
 
 ```bash
@@ -85,10 +125,10 @@ pip install -r requirements.txt
 cp .env.example .env        # completar DATABASE_URL y ANTHROPIC_API_KEY
 
 # Indexar (dry-run por defecto; --write ejecuta la escritura)
-python -m ragb.cli ingest corpus/ --tenant demo --write
+python -m ragb.cli --tenant demo ingest corpus/ --write
 
 # Consultar
-python -m ragb.cli ask "¿Cuál es el plazo de respuesta de severidad 1?" --tenant demo
+python -m ragb.cli --tenant demo ask "¿Cuál es el plazo de respuesta de severidad 1?"
 
 # Evaluar
 python -m evals.run

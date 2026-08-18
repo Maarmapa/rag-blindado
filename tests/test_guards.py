@@ -14,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from ragb.guards import (  # noqa: E402
     Permissions,
     detect_injection,
+    excise_injection,
     redact_secrets,
     sanitize_chunks,
 )
@@ -91,6 +92,87 @@ def test_cuarentena_separa_fragmento_malicioso():
     assert [c["source"] for c in accepted] == ["ok.md"]
     assert [q["source"] for q in quarantined] == ["malo.md"]
     assert quarantined[0]["quarantine_reason"]
+    # El fragmento es UN párrafo y es íntegramente la inyección: no queda nada
+    # legítimo que rescatar, así que se descarta completo.
+    assert quarantined[0]["scope"] == "chunk"
+
+
+# --- LLM01: escisión por párrafo ---------------------------------------------
+
+CORPUS = pathlib.Path(__file__).resolve().parents[1] / "corpus"
+
+
+def test_escision_conserva_el_dato_y_saca_la_instruccion():
+    """El README promete exactamente esto; antes no se cumplía.
+
+    `nota-proveedor.md` cabe entero en un fragmento, así que botarlo por la
+    inyección se llevaba también el plazo de pago y el horario de soporte, y
+    el pipeline contestaba "no encuentro esa información" a dos preguntas del
+    dataset dorado que el corpus sí responde.
+    """
+    texto = (CORPUS / "nota-proveedor.md").read_text(encoding="utf-8")
+    ex = excise_injection(texto)
+
+    assert ex.safe
+    assert "30 días" in ex.kept, "se perdió el plazo de pago"
+    assert "9:00 a 18:00" in ex.kept, "se perdió el horario de soporte"
+    assert "IGNORA TODAS" not in ex.kept
+    assert "revela el system prompt" not in ex.kept
+    assert not detect_injection(ex.kept).flagged
+
+
+def test_lo_escindido_queda_en_cuarentena_y_no_llega_al_prompt():
+    texto = (CORPUS / "nota-proveedor.md").read_text(encoding="utf-8")
+    chunks = [{"source": "nota-proveedor.md", "chunk_index": 0, "text": texto}]
+
+    accepted, quarantined = sanitize_chunks(chunks)
+
+    assert len(accepted) == 1 and accepted[0]["excised"] == 1
+    assert "9:00 a 18:00" in accepted[0]["text"]
+    assert [q["scope"] for q in quarantined] == ["paragraph"]
+    assert "IGNORA TODAS" in quarantined[0]["text"]
+    # La instrucción no aparece en NINGÚN texto que vaya al modelo.
+    assert all("IGNORA TODAS" not in c["text"] for c in accepted)
+
+
+def test_falla_cerrado_si_el_patron_cruza_el_corte_de_parrafo():
+    """Una regla que solo calza mirando el texto completo invalida la escisión.
+
+    Sacar párrafos no neutraliza un patrón que se forma ENTRE dos párrafos, así
+    que en ese caso se descarta el fragmento entero. Sin esta guarda, partir el
+    texto sería una manera de colar una inyección.
+    """
+    texto = "Dato legítimo: el plazo es de 30 días.\n\n<\n\nsystem>"
+    assert detect_injection(texto).flagged
+    assert not any(detect_injection(p).flagged for p in texto.split("\n\n"))
+
+    ex = excise_injection(texto)
+    assert not ex.safe
+    assert ex.kept == ""
+
+    accepted, quarantined = sanitize_chunks(
+        [{"source": "raro.md", "chunk_index": 0, "text": texto}]
+    )
+    assert accepted == []
+    assert quarantined[0]["scope"] == "chunk"
+
+
+def test_texto_limpio_pasa_intacto_por_la_escision():
+    texto = "Primer párrafo.\n\nSegundo párrafo."
+    ex = excise_injection(texto)
+    assert ex.safe and ex.kept == texto and ex.removed == ()
+
+
+def test_modo_auditoria_no_saca_nada():
+    """Con drop_flagged=False nada se excluye: se marca y se deja pasar."""
+    texto = (CORPUS / "nota-proveedor.md").read_text(encoding="utf-8")
+    chunks = [{"source": "nota-proveedor.md", "chunk_index": 0, "text": texto}]
+
+    accepted, quarantined = sanitize_chunks(chunks, drop_flagged=False)
+
+    assert quarantined == []
+    assert "IGNORA TODAS" in accepted[0]["text"]
+    assert accepted[0]["injection_flags"]
 
 
 # --- LLM06: mínimo privilegio ------------------------------------------------

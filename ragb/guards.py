@@ -66,6 +66,78 @@ def detect_injection(text: str) -> InjectionVerdict:
     return InjectionVerdict(flagged=bool(hits), rules=hits)
 
 
+def _paragraphs(text: str) -> list[str]:
+    """Parte por líneas en blanco, conservando el texto de cada párrafo."""
+    return [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+
+@dataclass(frozen=True)
+class Excision:
+    """Resultado de sacar los párrafos con instrucciones de un fragmento.
+
+    `safe` en False significa que la escisión no se pudo hacer con garantías y
+    quien llama debe descartar el fragmento completo.
+    """
+
+    kept: str
+    removed: tuple[str, ...]
+    rules: tuple[str, ...]
+    safe: bool
+
+
+def excise_injection(text: str) -> Excision:
+    """LLM01 a nivel de párrafo: saca la instrucción, conserva el dato.
+
+    Botar el fragmento entero porque un párrafo trae una inyección también bota
+    la información legítima que lo acompaña. En el corpus de demo eso es
+    literal: `nota-proveedor.md` cabe en un solo fragmento, así que la
+    inyección se llevaba consigo el plazo de pago y el horario de soporte, y el
+    pipeline respondía "no encuentro esa información" a dos preguntas que el
+    corpus sí contesta.
+
+    Fail-closed en dos puntos, porque partir el texto puede esconder un ataque:
+
+      1. Si el escaneo del fragmento completo detecta una regla que ningún
+         párrafo individual reproduce, esa regla calza CRUZANDO el corte. La
+         escisión por párrafo no la eliminaría, así que se descarta todo.
+      2. Lo que sobrevive se vuelve a escanear. Si todavía marca, se descarta.
+
+    Nunca deja pasar texto que el detector marque: en el peor caso se comporta
+    igual que botar el fragmento entero.
+    """
+    full = detect_injection(text)
+    if not full.flagged:
+        return Excision(kept=text, removed=(), rules=(), safe=True)
+
+    paragraphs = _paragraphs(text)
+    kept_parts: list[str] = []
+    removed: list[str] = []
+    attributed: set[str] = set()
+
+    for para in paragraphs:
+        verdict = detect_injection(para)
+        if verdict.flagged:
+            removed.append(para)
+            attributed.update(verdict.rules)
+        else:
+            kept_parts.append(para)
+
+    # (1) Reglas que solo aparecen mirando el fragmento entero: el patrón cruza
+    # el límite entre párrafos y sacar párrafos no lo neutraliza.
+    if set(full.rules) - attributed:
+        return Excision(kept="", removed=tuple(paragraphs), rules=full.rules, safe=False)
+
+    kept = "\n\n".join(kept_parts).strip()
+
+    # (2) Verificación sobre el resultado, no sobre la intención.
+    if not kept or detect_injection(kept).flagged:
+        return Excision(kept="", removed=tuple(paragraphs), rules=full.rules, safe=False)
+
+    return Excision(
+        kept=kept, removed=tuple(removed), rules=tuple(sorted(attributed)), safe=True
+    )
+
+
 def redact_secrets(text: str) -> tuple[str, tuple[str, ...]]:
     """LLM02: sustituye credenciales por un marcador antes de armar el prompt.
 
@@ -115,22 +187,72 @@ def sanitize_chunks(
     """Aplica LLM01 + LLM02 a los fragmentos recuperados.
 
     Devuelve (aceptados, cuarentena). Los aceptados llevan el texto ya
-    redactado; los de cuarentena conservan el motivo para auditoría.
+    redactado y sin los párrafos con instrucciones; la cuarentena conserva el
+    material excluido con su motivo, para auditoría.
+
+    La cuarentena es de lo excluido, no del fragmento: si un fragmento traía
+    una inyección entre datos legítimos, los datos siguen adelante y solo el
+    párrafo ofensor queda registrado. Cuando la escisión no se puede hacer con
+    garantías (ver `excise_injection`), cae al comportamiento anterior y se
+    descarta el fragmento completo.
     """
     accepted: list[dict] = []
     quarantined: list[dict] = []
 
     for chunk in chunks:
         verdict = detect_injection(chunk["text"])
-        clean, secrets = redact_secrets(chunk["text"])
-        enriched = {**chunk, "text": clean, "redacted": secrets}
 
-        if verdict.flagged and drop_flagged:
-            quarantined.append({**enriched, "quarantine_reason": verdict.reason})
+        if not verdict.flagged:
+            clean, secrets = redact_secrets(chunk["text"])
+            accepted.append({**chunk, "text": clean, "redacted": secrets})
             continue
 
-        if verdict.flagged:
-            enriched["injection_flags"] = verdict.rules
-        accepted.append(enriched)
+        if not drop_flagged:
+            # Modo auditoría: nada se saca, todo se marca.
+            clean, secrets = redact_secrets(chunk["text"])
+            accepted.append(
+                {
+                    **chunk,
+                    "text": clean,
+                    "redacted": secrets,
+                    "injection_flags": verdict.rules,
+                }
+            )
+            continue
+
+        excision = excise_injection(chunk["text"])
+
+        if not excision.safe:
+            clean, secrets = redact_secrets(chunk["text"])
+            quarantined.append(
+                {
+                    **chunk,
+                    "text": clean,
+                    "redacted": secrets,
+                    "quarantine_reason": verdict.reason,
+                    "scope": "chunk",
+                }
+            )
+            continue
+
+        clean, secrets = redact_secrets(excision.kept)
+        accepted.append(
+            {
+                **chunk,
+                "text": clean,
+                "redacted": secrets,
+                "excised": len(excision.removed),
+            }
+        )
+        for para in excision.removed:
+            redacted_para, _ = redact_secrets(para)
+            quarantined.append(
+                {
+                    **chunk,
+                    "text": redacted_para,
+                    "quarantine_reason": ", ".join(excision.rules),
+                    "scope": "paragraph",
+                }
+            )
 
     return accepted, quarantined

@@ -6,5 +6,10 @@ pyyaml>=6.0
 
 # Evaluación (solo necesario para `python -m evals.run`)
 ragas>=0.2.9
+# ragas 0.4.x importa langchain_community.chat_models.vertexai al cargar
+# (ragas/llms/base.py:12), y ese módulo desapareció en langchain-community 0.4.
+# Sin este techo, CI instala la 0.4.x y `import ragas` revienta con
+# ModuleNotFoundError antes de evaluar nada. Verificado: 0.3.13 lo tiene, 0.4.2 no.
+langchain-community<0.4
 langchain-anthropic>=0.3
 langchain-huggingface>=0.1

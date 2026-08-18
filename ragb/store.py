@@ -8,6 +8,7 @@ información entre clientes sin que ninguna regla de prompt lo impida.
 
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager
 
 import psycopg
@@ -24,10 +25,36 @@ def connection():
         yield conn
 
 
+def asegurar_extension() -> None:
+    """CREATE EXTENSION en su propia conexión, antes de registrar el tipo.
+
+    `register_vector()` busca `vector` en el catálogo de Postgres y falla si
+    no está, así que no puede correr sobre una base donde la extensión todavía
+    no existe. Crearla desde dentro de `connection()` es imposible: para
+    entonces `register_vector` ya reventó.
+
+    En una base ya usada nadie nota el problema —la extensión está puesta de
+    antes— y por eso vivió sin verse. En una base recién creada, que es la que
+    levanta CI en cada corrida, es el primer error.
+
+    Tolerante a propósito: si el CREATE falla (típicamente permisos en una base
+    gestionada donde la extensión ya viene instalada), se sigue igual y
+    `register_vector` queda como la verificación real. Nunca deja las cosas
+    peor de lo que estaban.
+    """
+    try:
+        with psycopg.connect(settings.require_database()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.commit()
+    except psycopg.Error as e:
+        print(f"[store] no se pudo crear la extensión vector: {e}", file=sys.stderr)
+
+
 def init_schema(dim: int) -> None:
     """Crea la tabla y el índice HNSW. Idempotente."""
+    asegurar_extension()
     with connection() as conn, conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
         cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS documents (
