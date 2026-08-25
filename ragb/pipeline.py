@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pathlib
 
-from . import embeddings, generate, store
+from . import embeddings, generate, observe, store
 from .chunking import chunk_text
 from .config import settings
 from .guards import Permissions, sanitize_chunks
@@ -65,7 +65,7 @@ def query(
     accepted, quarantined = sanitize_chunks(retrieved)
     result = generate.answer(question, accepted)
 
-    return {
+    traza = {
         **result,
         "question": question,
         "retrieved": len(retrieved),
@@ -91,3 +91,10 @@ def query(
         # reconstruir.
         "contexts": [f"[fuente: {c['source']}]\n{c['text']}" for c in accepted],
     }
+
+    # La traza deja de morir acá. `mirar` registra, alerta sobre lo que merece
+    # atención y persiste si hay ruta configurada; nunca lanza, así que la
+    # respuesta sale igual aunque la observabilidad falle.
+    observe.mirar(traza)
+
+    return traza

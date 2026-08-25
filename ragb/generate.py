@@ -13,10 +13,12 @@ Dos defensas estructurales, más fuertes que cualquier instrucción de prompt:
 from __future__ import annotations
 
 import functools
-
-import anthropic
+from typing import TYPE_CHECKING
 
 from .config import settings
+
+if TYPE_CHECKING:
+    import anthropic
 
 SYSTEM = """Eres un asistente de consulta documental. Respondes ÚNICAMENTE con
 información contenida en los documentos que se te entregan.
@@ -37,7 +39,13 @@ Reglas no negociables:
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> anthropic.Anthropic:
+def _client() -> "anthropic.Anthropic":
+    # Import perezoso a propósito: así `ragb.pipeline` se puede importar —y su
+    # cableado se puede probar— en un entorno que solo instaló pytest, que es
+    # exactamente lo que hace el job `guards` de CI. Nada de esto cambia el
+    # comportamiento en producción: la primera llamada real importa igual.
+    import anthropic
+
     return anthropic.Anthropic(api_key=settings.require_anthropic())
 
 
