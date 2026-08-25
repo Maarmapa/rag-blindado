@@ -112,6 +112,34 @@ credenciales y sin costo**— y también sobre las respuestas reales en el job d
 evals. Un pipeline que filtra el system prompt o se inventa una fuente rechaza
 el build **aunque las tres métricas estén en verde**.
 
+## La traza se mira
+
+`pipeline.query` siempre devolvió una traza completa —qué se recuperó, qué se
+usó, qué quedó en cuarentena y por qué—, y durante un tiempo esa traza **murió
+en el diccionario de retorno**: sin registro, sin persistencia y sin alerta,
+una guarda que se dispara mil veces se ve exactamente igual que una que no se
+disparó nunca.
+
+`ragb/observe.py` la mira. Por cada consulta emite una línea JSON al logger
+`ragb.observe`, y sube el nivel cuando hay algo que merece atención:
+
+| Señal | Nivel | Por qué importa |
+|---|---|---|
+| Fragmentos en cuarentena | WARNING | La guarda funcionó; alguien intentó algo |
+| Todo lo recuperado en cuarentena | ERROR | El usuario recibió un "no encuentro" que el corpus sí cubría |
+| La búsqueda no devolvió nada | WARNING | O el corpus no cubre la pregunta, o la colección está mal indexada |
+| El modelo rechazó la consulta | WARNING | Filtros de seguridad, no falla del pipeline |
+| Respuesta con fragmentos pero sin fuentes | ERROR | El anclaje se rompió: la cita ya no respalda nada |
+
+Con `TRACE_LOG_PATH` apuntando a un archivo, además anexa un JSONL por consulta.
+Sin dependencias nuevas: `logging` y la biblioteca estándar.
+
+Dos decisiones deliberadas: **nunca lanza** —perder la traza cuesta auditoría,
+perder la respuesta cuesta el servicio— y **por defecto no registra la pregunta
+ni la respuesta**, solo conteos, fuentes y motivos, porque un log compartido no
+es lugar para el contenido de los documentos. `TRACE_INCLUDE_TEXT=1` lo activa
+a sabiendas.
+
 Un caso marcado `expects_refusal` en el dataset queda fuera de las tres
 métricas: una negativa correcta no tiene afirmaciones que anclar al contexto ni
 contexto relevante que recuperar, y las métricas la puntúan cerca de cero por

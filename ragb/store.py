@@ -11,15 +11,26 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 
-import psycopg
-from pgvector.psycopg import register_vector
-
 from .config import settings
 from .guards import Permissions
 
 
+def _psycopg():
+    """psycopg + pgvector, importados al usarlos.
+
+    Mismo motivo que en `generate._client`: sin esto, importar `ragb.pipeline`
+    exige la base instalada, y el job `guards` de CI —que instala solo pytest—
+    no podría probar el cableado del pipeline, solo las guardas sueltas.
+    """
+    import psycopg
+    from pgvector.psycopg import register_vector
+
+    return psycopg, register_vector
+
+
 @contextmanager
 def connection():
+    psycopg, register_vector = _psycopg()
     with psycopg.connect(settings.require_database()) as conn:
         register_vector(conn)
         yield conn
@@ -42,6 +53,7 @@ def asegurar_extension() -> None:
     `register_vector` queda como la verificación real. Nunca deja las cosas
     peor de lo que estaban.
     """
+    psycopg, _ = _psycopg()
     try:
         with psycopg.connect(settings.require_database()) as conn:
             with conn.cursor() as cur:
