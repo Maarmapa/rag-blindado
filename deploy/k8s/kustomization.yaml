@@ -1,0 +1,20 @@
+# kubectl apply -k deploy/k8s/
+#
+# Kustomize plano, sin Helm: siete objetos no justifican un motor de
+# plantillas, y un YAML que se lee tal cual es un YAML que se audita tal cual.
+#
+# secret.example.yaml NO está en la lista a propósito: es documentación de
+# qué claves tiene que tener el Secret real, que se crea fuera del repo (ver
+# el comentario dentro del archivo). Si alguien lo agrega acá, aplicaría un
+# Secret con valores vacíos y el pod arrancaría "configurado" con nada.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rag-blindado
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml

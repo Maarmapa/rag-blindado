@@ -1,0 +1,24 @@
+# Convención de BuildKit: <Dockerfile>.dockerignore aplica cuando se construye
+# con `-f deploy/Dockerfile`, aunque el contexto sea la raíz del repo.
+#
+# Lo que NO viaja al build: la historia de git, los tests, las evals, el
+# corpus de ejemplo y —sobre todo— cualquier .env. Un .env copiado por
+# descuido a una capa de imagen es un secreto publicado en el registry.
+.git
+.github
+.env
+.env.*
+!.env.example
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+tests
+evals
+corpus
+sql
+deploy
+eval-report.json
+README.md
+LICENSE

@@ -197,3 +197,75 @@ reasoning quality matters.
 ## Licencia
 
 MIT.
+
+## Ciclo correctivo como grafo (LangGraph) y grafo de conocimiento
+
+Dos módulos que corren sin credenciales y se prueban en el job `guards`:
+
+- **`ragb/graph_flow.py`** — el ciclo CRAG (recuperar → calificar → reescribir
+  si nada es relevante → generar) como `StateGraph` de LangGraph. Estado
+  tipado, arista condicional declarada en un solo lugar, tope de rondas, sin
+  caída a búsqueda web (rompería el anclaje, LLM01/LLM09), y **sin contexto no
+  se llama al modelo**. Si el juez falla, degrada sin mentir: pasan los
+  fragmentos sin calificar y la traza lo marca. Las cuatro operaciones se
+  inyectan; `default_ops(perms)` cablea las reales.
+- **`ragb/kg.py`** — grafo de entidades y co-ocurrencias sobre los fragmentos
+  ya saneados (un fragmento en cuarentena no aporta nodos). Sirve para
+  ensanchar la pregunta con vecinos (`expand_question`) y para adjuntar
+  relaciones con fuente al contexto (`subgraph_context`). Determinista, sin
+  modelo; cuando haga falta extracción con LLM se enchufa como `extractor`.
+
+```python
+from ragb import graph_flow, kg
+from ragb.guards import Permissions
+
+ops = graph_flow.default_ops(Permissions(tenant="demo"))
+g = graph_flow.build_graph(**ops)
+traza = graph_flow.run(g, "¿quién atiende un incidente de severidad 1?", max_rounds=2)
+```
+
+### Tercer juez de relevancia: Jev (TypeSafe AI)
+
+`ragb/grade_jev.py` implementa el `Grader` del grafo con **Jev**, el modelo
+de razonamiento no generativo de TypeSafe AI (API System One). En vez de pedirle
+a un LLM que escriba "relevante" y parsear texto, se le manda el estado
+(pregunta + fragmentos numerados) y una pregunta `noul` por fragmento en una
+sola llamada; el servidor las evalúa en paralelo y devuelve una probabilidad
+calibrada por fragmento. El umbral es `JEV_THRESHOLD` (0,5 por defecto).
+
+- Se elige con `RAGB_GRADER=jev` (`ragb.graders.make_grader`, o `default_ops(perms, grader="jev")`); el valor por
+  defecto sigue siendo `llm`. Un nombre desconocido es error, no caída a `llm`.
+- Exige `TYPESAFE_API_KEY`; sin ella el juez no arranca (fail-closed al
+  construirlo, no en la primera consulta).
+- **Si Jev falla, el juez lanza** y el grafo degrada a la vista
+  (`degraded=True`, fragmentos sin calificar): nunca inventa veredictos. Un
+  veredicto faltante o que no sea probabilidad también es error.
+- Reintenta una vez solo ante 429/5xx o corte de red, respetando `Retry-After`.
+- **Sin dependencias nuevas y sin SDK**: el transporte es `urllib` y se
+  inyecta para probar sin red (`tests/test_grade_jev.py`, incluida la
+  integración con el grafo). No se instala ni se usa `typesafe-sdk`.
+- Costo según su documentación (sep-2026): US$0,042 por millón de tokens de
+  entrada, salida sin costo; con `top_k=5` una consulta ronda 1,5k tokens.
+- ⚠ TypeSafe documenta el inglés como idioma principal del modelo. Las
+  instrucciones van en inglés; los fragmentos, en el idioma del corpus. El
+  efecto sobre un corpus en español **no está medido todavía**.
+
+### Cuarto juez: un cross-encoder local (Small Language Model)
+
+`ragb/grade_slm.py` califica relevancia con un cross-encoder entrenado en
+`slm/` (dataset determinista desde el corpus, entrenamiento reproducible,
+métricas versionadas con su manifiesto). Se elige con `SLM_GRADER_PATH`; si
+el modelo no está o devuelve puntajes inválidos, el juez lanza y el grafo
+degrada a la vista. Método, números reales y límites en `slm/README.md` y
+`slm/RESULTADOS.md`. Sus dependencias (torch, transformers, accelerate) son
+opcionales y van comentadas en `requirements.txt`.
+
+## Despliegue en Kubernetes
+
+`ragb/api.py` expone el pipeline por HTTP con la biblioteca estándar
+(`/healthz`, `/readyz`, `POST /query` con bearer `RAGB_API_TOKEN`, cerrado por
+defecto) y `deploy/` trae el Dockerfile y los manifiestos (namespace con Pod
+Security `restricted`, Deployment, Service, HPA, PDB, NetworkPolicy),
+validados con `kubeconform -strict` y con tests de cableado que fallan si
+alguien afloja el `securityContext` o usa `:latest`. Guía en
+`deploy/README.md`.

@@ -1,0 +1,49 @@
+# Escala por CPU: los embeddings de la pregunta corren en el proceso (torch en
+# CPU) y son la parte que satura; la generación es una espera de red.
+#
+# `averageUtilization` se mide contra `requests.cpu` del Deployment (1 CPU),
+# NO contra `limits` (2): el 70 % dispara a 700m por réplica, o sea al 35 % del
+# techo real. Es a propósito: la réplica nueva tarda (pull + carga del modelo
+# con RAGB_WARMUP) y el tramo entre 700m y 2 CPU es la ráfaga que absorbe la
+# cola mientras arranca. Si se cambian `requests`, este número cambia de
+# significado; el test de cableado ata las dos cosas.
+#
+# min 2 coincide con `replicas` del Deployment: el HPA nunca baja del piso de
+# disponibilidad. max 6 es un techo de costo, no de capacidad: cada réplica
+# reserva 1 GiB y una API de pago detrás.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rag-blindado
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rag-blindado
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    # Bajar despacio: cada réplica que muere tira el caché del modelo y la
+    # siguiente subida paga la carga de nuevo. Subir rápido.
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
