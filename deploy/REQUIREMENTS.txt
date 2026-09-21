@@ -1,0 +1,10 @@
+# Dependencias nuevas que introduce deploy/ y ragb/api.py: NINGUNA.
+#
+# ragb/api.py usa solo la librería estándar (http.server, hmac, hashlib, json,
+# argparse, signal). tests/test_api.py usa http.client y pytest.
+# tests/test_k8s_manifests.py usa pyyaml, que el job `guards` ya instala.
+#
+# Herramientas de verificación (no van en requirements.txt, se bajan en el
+# momento de usarlas):
+#   - kubeconform >= 0.6  (binario, ver deploy/README.md §5)
+#   - ruff                (pip install ruff; solo para lint local)

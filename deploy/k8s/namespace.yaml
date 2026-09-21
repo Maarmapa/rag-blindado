@@ -1,0 +1,17 @@
+# Namespace propio: es la unidad de aislamiento de la NetworkPolicy, de las
+# cuotas y del RBAC. Un servicio que habla con una base y una API de pago no
+# comparte namespace con lo que no lo necesita.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+    # Pod Security Admission en modo `restricted`: el clúster rechaza cualquier
+    # pod del namespace que no cumpla el perfil (no root, sin escalada, sin
+    # capabilities, seccomp). Es la misma política que el Deployment declara,
+    # pero aplicada por el API server: un manifiesto futuro que la olvide no
+    # entra. `warn` y `audit` avisan sin bloquear, por si se ajusta después.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

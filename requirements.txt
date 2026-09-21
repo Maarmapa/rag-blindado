@@ -4,6 +4,19 @@ pgvector>=0.3.6
 sentence-transformers>=3.0
 pyyaml>=6.0
 
+# Ciclo CRAG como grafo de estados y grafo de conocimiento (ragb/graph_flow.py, ragb/kg.py)
+langgraph>=1.0
+networkx>=3.0
+# El juez Jev (ragb/grade_jev.py, ragb/graders.py) no agrega dependencias: usa urllib.
+# SDK opcional, no requerido: typesafe-sdk
+# La API HTTP (ragb/api.py) tampoco: biblioteca estándar.
+
+# Opcional: juez cross-encoder local (ragb/grade_slm.py, slm/). Solo para
+# entrenar o servir ese juez; el resto del pipeline no los importa.
+# torch>=2.14
+# transformers>=5.17
+# accelerate>=1.0
+
 # Evaluación (solo necesario para `python -m evals.run`)
 ragas>=0.2.9
 # ragas 0.4.x importa langchain_community.chat_models.vertexai al cargar

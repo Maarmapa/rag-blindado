@@ -1,0 +1,32 @@
+{
+  "by_kind": {
+    "hard_negative": 27,
+    "negative": 210,
+    "positive": 36,
+    "refusal": 39
+  },
+  "by_split": {
+    "train": {
+      "cases": 6,
+      "negatives": 216,
+      "positives": 18,
+      "rows": 234
+    },
+    "valid": {
+      "cases": 2,
+      "negatives": 60,
+      "positives": 18,
+      "rows": 78
+    }
+  },
+  "cases": 8,
+  "chunk_chars": 320,
+  "chunk_overlap": 60,
+  "chunks": 13,
+  "item_min_terms": 3,
+  "item_threshold": 0.75,
+  "positive_threshold": 0.5,
+  "quarantined": 1,
+  "total": 312,
+  "valid_buckets": 30
+}

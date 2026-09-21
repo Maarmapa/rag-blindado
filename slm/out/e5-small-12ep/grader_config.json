@@ -1,0 +1,7 @@
+{
+  "base_model": "intfloat/multilingual-e5-small",
+  "pair_format": "plain",
+  "max_length": 256,
+  "chunk_chars": 320,
+  "default_threshold": 0.5
+}

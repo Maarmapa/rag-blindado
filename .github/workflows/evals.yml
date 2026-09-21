@@ -15,8 +15,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest pyyaml
-      - name: Tests de guardas (OWASP LLM01/LLM02/LLM06)
+      - run: pip install pytest pyyaml langgraph networkx
+      - name: Tests de guardas, ciclo CRAG y grafo de conocimiento (OWASP LLM01/LLM02/LLM06)
         run: python -m pytest tests/ -v
 
   # Evaluación de calidad del RAG con Ragas. Requiere credenciales, así que

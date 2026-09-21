@@ -1,0 +1,13 @@
+# Extra OPCIONAL para el juez SLM (slm/train_grader.py y ragb/grade_slm.py).
+# No va en requirements.txt: el job `guards` de CI y el pipeline sin juez
+# propio no lo necesitan. Instalar solo en la máquina que entrena o sirve.
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU, sin CUDA
+#   pip install -r slm/REQUIREMENTS.txt
+#
+# Los pisos son las versiones con las que se entrenó y sirvió de verdad
+# (slm/RESULTADOS.md). Versiones anteriores no se probaron; `use_cpu` y el
+# `compute_loss(**kwargs)` de Trainer cambiaron en la serie 4.x.
+torch>=2.14
+transformers>=5.17
+accelerate>=1.0
