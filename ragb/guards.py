@@ -38,11 +38,27 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 # Secretos que nunca deben viajar al modelo aunque estén en el corpus.
+#
+# Un patrón por tipo de secreto, para que `redact_secrets` no repita tipos.
+# Los de «sk-» exigen que antes no haya letra, dígito, guion bajo ni guion: sin
+# eso, una palabra compuesta de prosa técnica como «task-ant-colony-…» se
+# redactaba como llave de Anthropic.
 _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
-    ("openai_key", re.compile(r"sk-[A-Za-z0-9]{32,}")),
-    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
-    ("aws_key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    # Anthropic va antes que OpenAI: las dos empiezan con «sk-», y si el patrón
+    # de OpenAI se ensancha, una llave sk-ant- no debe quedar rotulada como suya.
+    ("anthropic_key", re.compile(r"(?<![\w-])sk-ant-[A-Za-z0-9_\-]{20,}")),
+    # OpenAI: las de proyecto, cuenta de servicio y administración traen guiones
+    # y guiones bajos en el cuerpo; el formato viejo, solo alfanuméricos. El
+    # cuerpo con guiones va atado a su prefijo para no arrastrar prosa con «sk-».
+    ("openai_key", re.compile(
+        r"(?<![\w-])sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{32,}"
+        r"|[A-Za-z0-9]{32,})")),
+    # GitHub: los clásicos (ghp_, gho_, …) y los de grano fino (github_pat_).
+    ("github_token", re.compile(
+        r"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}")),
+    # AWS: AKIA es la llave de larga duración y ASIA la temporal de STS. Asia
+    # también es una palabra, así que ASIA va entre límites de palabra.
+    ("aws_key", re.compile(r"AKIA[0-9A-Z]{16}|\bASIA[0-9A-Z]{16}\b")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}")),
     ("pg_dsn", re.compile(r"postgres(?:ql)?://[^\s:]+:[^\s@]+@[^\s]+")),
 )

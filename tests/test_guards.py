@@ -77,6 +77,83 @@ def test_no_toca_texto_sin_secretos():
     assert found == ()
 
 
+# Llaves de prueba armadas por partes y con relleno evidentemente falso: en el
+# código nunca aparece una llave entera que un escáner de secretos tome por real.
+_RELLENO = "FALSA_de-prueba_" * 4
+_OPENAI_PROYECTO = "sk-proj-" + _RELLENO
+_GITHUB_FINO = "github_pat_" + "FALSA" * 5 + "_" + "EJEMPLO" * 9
+_AWS_TEMPORAL = "ASIA" + "FALSAEJEMPLO2026"
+
+
+@pytest.mark.parametrize(
+    ("secret", "tipo"),
+    [
+        # Formatos que antes pasaban sin redactar.
+        (_OPENAI_PROYECTO, "openai_key"),
+        ("sk-svcacct-" + _RELLENO, "openai_key"),
+        ("sk-admin-" + _RELLENO, "openai_key"),
+        (_GITHUB_FINO, "github_token"),
+        (_AWS_TEMPORAL, "aws_key"),
+        # Controles: los que ya funcionaban siguen igual y con su tipo.
+        ("sk-" + "a" * 48, "openai_key"),
+        ("sk-ant-api03-" + "a" * 40, "anthropic_key"),
+        ("ghp_" + "b" * 36, "github_token"),
+        ("AKIA" + "IOSFODNN7EXAMPLE", "aws_key"),
+    ],
+)
+def test_redacta_cada_formato_con_su_tipo(secret, tipo):
+    """La llave sale entera y el marcador dice de qué tipo era.
+
+    Se compara el texto completo y no solo que la llave ya no esté: un patrón
+    que se corta en el primer guion deja afuera el resto del cuerpo, y eso
+    también es una fuga.
+    """
+    clean, found = redact_secrets(f"config: {secret} fin")
+    assert clean == f"config: [REDACTED:{tipo}] fin"
+    assert found == (tipo,)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # «sk-» a mitad de una palabra compuesta no es el comienzo de una llave.
+        "El equipo revisó el risk-assessment-framework-version-two antes del cierre.",
+        "Reservamos la sala con el desk-booking-system-for-the-office-2026.",
+        "Migramos el task-proj-management-dashboard-for-the-office-2026 a la nube.",
+        "El task-ant-colony-optimization-for-routing-2026 encontró la ruta más corta.",
+        # Un término que empieza con «sk-» tampoco: el cuerpo con guiones solo se
+        # acepta detrás de los prefijos de OpenAI.
+        "Probamos el sk-learn-compatible-transformers-for-text-2026 en el piloto.",
+        # ASIA a mitad de palabra, o seguida de más letras, no es una llave.
+        "Se viene el #GIMNASIARITMICA2026CHILE en Viña del Mar.",
+        "El lema del foro fue #ASIAPACIFICOREGIONAL2026 y nada más.",
+        "Las ventas en ASIA crecieron un 12% en 2026.",
+        # Nombrar el prefijo en una guía no es filtrar una llave.
+        "Las llaves de proyecto empiezan con sk-proj- y los tokens finos con github_pat_.",
+    ],
+)
+def test_no_redacta_prosa_parecida_a_una_llave(text):
+    clean, found = redact_secrets(text)
+    assert clean == text, f"falso positivo: {text!r}"
+    assert found == ()
+
+
+def test_la_redaccion_no_toca_el_texto_alrededor():
+    """Sale la llave y nada más: ni la puntuación pegada ni el resto de la línea."""
+    texto = (
+        f"Para pruebas usa {_OPENAI_PROYECTO}, no la de producción.\n"
+        f"AWS_ACCESS_KEY_ID={_AWS_TEMPORAL}\n"
+        f"El token ({_GITHUB_FINO}) vence en 30 días."
+    )
+    clean, found = redact_secrets(texto)
+    assert clean == (
+        "Para pruebas usa [REDACTED:openai_key], no la de producción.\n"
+        "AWS_ACCESS_KEY_ID=[REDACTED:aws_key]\n"
+        "El token ([REDACTED:github_token]) vence en 30 días."
+    )
+    assert found == ("openai_key", "github_token", "aws_key")
+
+
 # --- Cuarentena de fragmentos ------------------------------------------------
 
 def test_cuarentena_separa_fragmento_malicioso():
