@@ -1,0 +1,172 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-blindado
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+    app.kubernetes.io/component: api
+spec:
+  # Dos réplicas como piso: con una sola, cualquier rollout o drenado de nodo
+  # deja el servicio caído. El HPA escala hacia arriba desde acá.
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rag-blindado
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Nunca menos réplicas de las declaradas durante un despliegue: primero
+      # sube la nueva y pasa readiness, después baja la vieja.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rag-blindado
+        app.kubernetes.io/component: api
+    spec:
+      # El pod no habla con la API de Kubernetes; sin token de ServiceAccount
+      # montado, una ejecución de código dentro del contenedor no tiene con qué
+      # moverse por el clúster.
+      automountServiceAccountToken: false
+      # Kubernetes manda SIGTERM y espera esto antes de SIGKILL. La cuenta es:
+      # preStop (5 s, abajo) + RAGB_SHUTDOWN_TIMEOUT del ConfigMap (20 s) < 30.
+      # ragb/api.py captura SIGTERM, deja de aceptar conexiones y espera a las
+      # que están en vuelo hasta ese tope (tests/test_api.py lo prueba con un
+      # request lento); pasado el tope, las corta y lo dice en el log. El test
+      # tests/test_k8s_manifests.py afirma que la suma cierra.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # Mismo uid que crea el Dockerfile. Declararlo acá hace que el kubelet
+        # lo verifique aunque la imagen cambie de usuario por error.
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Tag explícito, nunca `latest`: `latest` no dice qué está corriendo
+          # y un rollback a `latest` es un rollback a nada. El test
+          # tests/test_k8s_manifests.py lo afirma. Para producción, además,
+          # fijar el digest (`…:0.1.0@sha256:…`).
+          image: ghcr.io/maarmapa/rag-blindado:0.1.0
+          # `Always` mientras la referencia sea un tag: un tag es mutable, y
+          # con `IfNotPresent` dos nodos pueden correr imágenes distintas bajo
+          # el mismo nombre. Con digest da lo mismo; sin digest, `Always` es
+          # lo que hace que todas las réplicas de un rollout vean lo mismo.
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Variables no secretas y secretas por separado: envFrom carga ambas
+          # sin enumerar clave por clave, así agregar una variable no obliga a
+          # tocar el Deployment. El Secret lo crea quien despliega (ver
+          # secret.example.yaml); si no existe, el pod no arranca, que es lo
+          # correcto: arrancar sin credenciales sería atender sin ellas.
+          envFrom:
+            - configMapRef:
+                name: rag-blindado-config
+            - secretRef:
+                name: rag-blindado-secrets
+          resources:
+            # Puntos de partida, no medidas: torch + el modelo de embeddings
+            # (e5-small, 118M parámetros en fp32) rondan el gigabyte residente.
+            # Con RAGB_WARMUP=1 (ConfigMap) el modelo se carga UNA vez al
+            # arrancar, así que si el límite de memoria queda corto el OOM se
+            # ve en el arranque, no en la primera ráfaga de consultas.
+            #
+            # CPU: el HPA mide la utilización contra `requests`, no contra
+            # `limits`. Con requests 1 y limits 2, el 70 % del HPA dispara a
+            # 700m; el tramo hasta 2 CPU es ráfaga para la cola de consultas
+            # mientras la réplica nueva arranca. OMP_NUM_THREADS del ConfigMap
+            # va igual a `limits.cpu`: torch dimensiona su pool por los cores
+            # del NODO, y 32 hilos bajo un límite de 2 CPU es puro throttling.
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Nada en el sistema de archivos de la imagen se escribe en runtime.
+            # Lo único escribible es /tmp (emptyDir abajo): caché del modelo y
+            # temporales de Python.
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # Liveness: ¿el proceso responde? Si no, reiniciar. NO mira la
+          # configuración ni la base: reiniciar un pod no arregla un Secret
+          # vacío ni una base caída, solo agrega un crash loop al problema.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: ¿puede atender? Responde 503 con la configuración
+          # incompleta (incluido RAGB_API_TOKEN: sin él /query rechaza todo) y
+          # mientras el modelo de embeddings se carga (RAGB_WARMUP=1). El pod
+          # sale del Service sin morir, que es lo que permite ver el motivo en
+          # `kubectl describe` y en los logs. Un rollout con maxUnavailable 0
+          # espera acá: la réplica nueva no recibe tráfico fría.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Startup: cubre el arranque lento (pull grande, nodo cargado) sin
+          # aflojar la liveness para siempre. Hasta 60 s antes de que la
+          # liveness empiece a contar. El calentamiento del modelo NO cuenta
+          # acá: corre en un hilo y /healthz contesta desde el primer segundo.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # preStop: el SIGTERM llega ANTES de que el Endpoint salga del
+          # Service en todos los nodos; estos segundos cubren esa propagación
+          # para que el ingress deje de mandar requests a un pod que ya no
+          # acepta. Suma al terminationGracePeriodSeconds (ver arriba).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # emptyDir con tope: el caché del modelo (~500 MB para e5-small) y nada
+        # más. Sin sizeLimit, un proceso que escriba sin control llena el disco
+        # del nodo; con él, el pod es el que se desaloja.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+      # Separar las réplicas entre nodos cuando se pueda: dos réplicas en el
+      # mismo nodo no sobreviven al nodo. `preferred`, no `required`, para que
+      # un clúster de un solo nodo (desarrollo) igual programe los dos pods.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: rag-blindado
+                    app.kubernetes.io/component: api

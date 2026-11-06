@@ -1,0 +1,8 @@
+# Pesos y tokenizers entrenados: cientos de MB, no van al repo. Solo las
+# métricas y el contrato de tokenización (grader_config.json), que el juez
+# exige y sin el cual la carpeta no sirve como juez.
+*
+!.gitignore
+!*/
+!*/metrics.json
+!*/grader_config.json

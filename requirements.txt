@@ -10,6 +10,19 @@ pgvector>=0.3.6
 sentence-transformers>=3.0
 pyyaml>=6.0
 
+# Ciclo CRAG como grafo de estados y grafo de conocimiento (ragb/graph_flow.py, ragb/kg.py)
+langgraph>=1.0
+networkx>=3.0
+# El juez Jev (ragb/grade_jev.py, ragb/graders.py) no agrega dependencias: usa urllib.
+# SDK opcional, no requerido: typesafe-sdk
+# La API HTTP (ragb/api.py) tampoco: biblioteca estándar.
+
+# Opcional: juez cross-encoder local (ragb/grade_slm.py, slm/). Solo para
+# entrenar o servir ese juez; el resto del pipeline no los importa.
+# torch>=2.14
+# transformers>=5.17
+# accelerate>=1.0
+
 # Evaluación (solo necesario para `python -m evals.run`)
 # Techo en 1: ragas avisa que su 1.0 elimina los imports de métricas que usa
 # evals/run.py (ver el PR #2). Al 5-nov-2026 la última publicada es la 0.4.3.

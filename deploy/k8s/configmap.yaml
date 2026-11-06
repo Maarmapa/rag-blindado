@@ -1,0 +1,57 @@
+# Configuración NO secreta. Todo lo que está acá puede leerse con
+# `kubectl get configmap -o yaml` por cualquiera con acceso al namespace, así
+# que la regla es simple: si duele que se vea, no va acá, va al Secret.
+#
+# Las claves son las mismas variables que lee ragb/config.py (pipeline) y
+# ragb/api.py (servidor); los valores por defecto del código valen para
+# desarrollo y se repiten acá para que el despliegue sea explícito y no
+# dependa de recordarlos.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-blindado-config
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+data:
+  # ⚠ Cambiar el modelo de embeddings obliga a RE-INDEXAR el corpus: el
+  # espacio vectorial es otro y los vectores guardados dejan de ser comparables.
+  EMBEDDING_MODEL: "intfloat/multilingual-e5-small"
+  GENERATION_MODEL: "claude-opus-5"
+  COLLECTION: "default"
+  TOP_K: "5"
+  CHUNK_CHARS: "900"
+  CHUNK_OVERLAP: "150"
+  # Caché del modelo de embeddings. /tmp es el único directorio escribible del
+  # contenedor (emptyDir en el Deployment); sin esto, sentence-transformers
+  # intentaría escribir en $HOME y el sistema de archivos de solo lectura lo
+  # rechazaría en la primera consulta.
+  HF_HOME: "/tmp/hf"
+  # --- ragb/api.py ---------------------------------------------------------
+  # Calentar el modelo al arrancar, en un hilo: /readyz responde 503 hasta que
+  # esté cargado, así una réplica nueva (rollout, HPA) no recibe tráfico fría
+  # ni carga el modelo N veces bajo N primeras consultas simultáneas.
+  RAGB_WARMUP: "1"
+  # Cuánto espera el servidor a los requests en vuelo tras SIGTERM. Tiene que
+  # ser MENOR que terminationGracePeriodSeconds − preStop del Deployment
+  # (30 − 5); tests/test_k8s_manifests.py lo afirma.
+  RAGB_SHUTDOWN_TIMEOUT: "20"
+  # Fusible de conexiones simultáneas por pod: por encima, 503 sin abrir hilo.
+  # No reemplaza al rate limit del ingress; evita que un puñado de sockets
+  # ociosos crezca hasta que la liveness reinicie el pod.
+  RAGB_MAX_CONNECTIONS: "64"
+  # --- torch ---------------------------------------------------------------
+  # torch/OpenMP dimensionan su pool de hilos por los cores del NODO, no por
+  # el cgroup: en un nodo de 32 cores, un encode lanza 32 hilos bajo un límite
+  # de 2 CPU y el pod vive estrangulado (CFS throttling), que es justo la señal
+  # con la que el HPA escala. Igual a `limits.cpu` del Deployment; el test de
+  # cableado lo afirma.
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  # Observabilidad (ragb/observe.py): por defecto el registro NO incluye la
+  # pregunta ni la respuesta. Un log compartido del clúster no es lugar para
+  # el contenido de los documentos.
+  TRACE_INCLUDE_TEXT: "0"
+  # Trazas a stdout solamente. Un JSONL en disco moriría con el pod; si se
+  # quiere persistencia, va un volumen o un colector de logs, no un archivo.
+  TRACE_LOG_PATH: ""

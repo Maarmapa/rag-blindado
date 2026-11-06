@@ -1,0 +1,24 @@
+# ClusterIP: el servicio no se expone al exterior por sí mismo. Lo que entra
+# desde afuera pasa por el ingress/gateway del clúster, que es donde viven el
+# TLS, el rate limit y el WAF; este Service solo es el nombre interno
+# (rag-blindado.rag-blindado.svc) que ese ingress apunta.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-blindado
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rag-blindado
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80
+      # Por nombre, no por número: si el puerto del contenedor cambia, cambia
+      # en un solo lugar (el Deployment) y el Service lo sigue.
+      targetPort: http
+      protocol: TCP

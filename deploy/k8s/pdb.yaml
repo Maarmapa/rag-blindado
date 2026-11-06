@@ -1,0 +1,22 @@
+# Presupuesto de interrupción: una operación voluntaria del clúster (drenar un
+# nodo, actualizar el kubelet, un `kubectl drain`) no puede dejar menos de una
+# réplica atendiendo. Sin esto, un drenado de dos nodos a la vez saca las dos
+# réplicas y el servicio queda caído "legalmente".
+#
+# minAvailable 1 (y no 2) a propósito: con 2 réplicas y minAvailable 2, ningún
+# nodo se podría drenar nunca y el operador terminaría forzando —o borrando el
+# PDB—. Un presupuesto que bloquea todo se ignora; uno que deja margen se
+# respeta.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rag-blindado
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rag-blindado
+      app.kubernetes.io/component: api

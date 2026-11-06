@@ -1,0 +1,94 @@
+# Red cerrada por defecto para los pods de la API. Declarar `Ingress` y
+# `Egress` en policyTypes hace que TODO lo que no esté listado abajo quede
+# denegado.
+#
+# Lo que esta política cierra de verdad, dicho sin exagerar: entrada solo
+# desde el namespace del ingress al 8080; salida solo a DNS del clúster, a
+# Postgres dentro del rango privado y a HTTPS hacia direcciones PÚBLICAS. Lo
+# que NO cierra: la exfiltración por HTTPS a un host público cualquiera. Una
+# NetworkPolicy no filtra por dominio; acotar el 443 a `api.anthropic.com` (y
+# a huggingface.co si el modelo no viene horneado en la imagen) exige un
+# proxy de salida con lista de dominios o una política por FQDN del CNI
+# (p. ej. CiliumNetworkPolicy `toFQDNs`). Ver deploy/README.md, "Lo que este
+# directorio NO resuelve".
+#
+# ⚠ Requiere un CNI que aplique NetworkPolicy (Calico, Cilium, etc.). Con un
+# CNI que no la soporta, el objeto se crea y no hace nada: verificar con un
+# pod de prueba, no confiar en que el `apply` haya funcionado.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rag-blindado-api
+  namespace: rag-blindado
+  labels:
+    app.kubernetes.io/name: rag-blindado
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rag-blindado
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Solo el namespace del ingress/gateway, y solo al puerto de la API. Otros
+    # pods del clúster no pueden hablarle directo: la única puerta es la que
+    # tiene TLS y rate limit. El nombre del namespace es un PARÁMETRO del
+    # clúster: `ingress-nginx` es el default más común; con Gateway API o
+    # Traefik va el suyo.
+    #
+    # La sonda de liveness/readiness NO pasa por acá: la hace el kubelet desde
+    # el nodo y las NetworkPolicy no la bloquean.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS: sin esto nada resuelve, ni la base ni la API. Se limita al
+    # namespace del sistema; el selector de pods `k8s-app: kube-dns` es el que
+    # usan CoreDNS y kube-dns.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Postgres. Una regla con `ports` y sin `to` sería "5432 hacia CUALQUIER
+    # destino, internet incluido"; por eso el `to` es obligatorio (el test de
+    # cableado lo exige en toda regla de egreso). El CIDR es un PARÁMETRO:
+    # 10.0.0.0/8 cubre el caso común de una base administrada dentro de la
+    # VPC y deja fuera cualquier Postgres público; reemplazarlo por el /32 de
+    # la base, o por un namespaceSelector si la base corre en el clúster.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 5432
+    # HTTPS: la API de Anthropic y, mientras el modelo no venga horneado en la
+    # imagen, la descarga desde Hugging Face al arrancar. Ambos viven detrás
+    # de CDNs, así que se abre a direcciones PÚBLICAS y se excluye todo lo
+    # privado: la metadata del nodo (169.254.169.254, credenciales de la nube),
+    # el API server y cualquier servicio interno en 443 (RFC 1918 y el rango
+    # CGNAT que algunos clústeres usan para pods).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443
