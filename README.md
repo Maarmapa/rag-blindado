@@ -53,7 +53,7 @@ es alto; capaz donde importa la respuesta.
 | Riesgo OWASP | Control | Dónde |
 |---|---|---|
 | **LLM01** Prompt Injection | Detección de instrucciones incrustadas en el texto recuperado + delimitado estructural del contexto en bloques `<documento>` | `ragb/guards.py`, `ragb/generate.py` |
-| **LLM02** Sensitive Information Disclosure | Redacción de credenciales (claves de API, tokens, DSN) antes de armar el prompt | `ragb/guards.py` |
+| **LLM02** Sensitive Information Disclosure | Redacción de credenciales (claves de API, tokens, DSN) al indexar, sobre el documento entero, y otra vez antes de armar el prompt | `ragb/guards.py`, `ragb/pipeline.py` |
 | **LLM06** Excessive Agency | Mínimo privilegio: lectura acotada por colección, escritura denegada por defecto, `dry_run` como default | `ragb/guards.py` |
 | **LLM08** Vector and Embedding Weaknesses | Filtro por `tenant` a nivel de SQL en toda búsqueda, más RLS en el esquema | `ragb/store.py`, `sql/schema.sql` |
 | **LLM09** Misinformation | Fail-closed: sin contexto suficiente el sistema declara que no sabe, en vez de completar | `ragb/generate.py` |
@@ -184,7 +184,8 @@ production.
 
 Retrieved content is treated as **data, never instructions**: embedded prompt
 injections are detected and quarantined with a logged reason, credentials are
-redacted before the prompt is assembled, tenant isolation is enforced in SQL,
+redacted at ingestion and again before the prompt is assembled, tenant
+isolation is enforced in SQL,
 and write access is denied by default with ingestion running in dry-run unless
 explicitly enabled. Three Ragas metrics — faithfulness, answer relevancy and
 context precision — run against a golden dataset in CI and fail the build below
