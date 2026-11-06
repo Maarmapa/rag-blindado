@@ -7,7 +7,7 @@ import pathlib
 from . import embeddings, generate, observe, store
 from .chunking import chunk_text
 from .config import settings
-from .guards import Permissions, sanitize_chunks
+from .guards import Permissions, redact_secrets, sanitize_chunks
 
 
 def ingest_path(
@@ -27,8 +27,18 @@ def ingest_path(
     )
 
     rows: list[dict] = []
+    redactados: dict[str, tuple[str, ...]] = {}
     for f in files:
-        pieces = chunk_text(f.read_text(encoding="utf-8"))
+        # LLM02 sobre el documento entero, antes de fragmentar. Redactar recién
+        # al recuperar no alcanza: si el corte de un fragmento cae dentro de una
+        # llave, el fragmento siguiente arranca sin el prefijo y ningún patrón
+        # la reconoce. Pasa en un JSON de una sola línea, donde no hay «\n» ni
+        # «. » para cortar limpio. De paso, la llave no queda guardada en la
+        # base ni convertida en embedding.
+        texto, tipos = redact_secrets(f.read_text(encoding="utf-8"))
+        if tipos:
+            redactados[str(f)] = tipos
+        pieces = chunk_text(texto)
         vectors = embeddings.embed(pieces)
         rows.extend(
             {
@@ -46,6 +56,9 @@ def ingest_path(
         "chunks": len(rows),
         "written": written,
         "dry_run": perms.dry_run,
+        # Qué archivos traían credenciales y de qué tipo. La base queda limpia,
+        # pero el archivo de origen no: alguien tiene que sacarlas de ahí.
+        "redacted": redactados,
     }
 
 

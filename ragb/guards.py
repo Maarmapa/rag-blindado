@@ -4,7 +4,7 @@ Cada control está mapeado al riesgo correspondiente de OWASP Top 10 for LLM
 Applications, para que la decisión de diseño sea auditable:
 
   LLM01 Prompt Injection      -> detect_injection() sobre el texto recuperado
-  LLM02 Sensitive Info Disc.  -> redact_secrets() antes de mandar al modelo
+  LLM02 Sensitive Info Disc.  -> redact_secrets() al indexar y antes de mandar al modelo
   LLM06 Excessive Agency      -> Permissions (mínimo privilegio, dry-run)
   LLM08 Vector/Embedding Weak.-> filtros de tenant en la búsqueda (store.py)
 
@@ -40,27 +40,75 @@ _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Secretos que nunca deben viajar al modelo aunque estén en el corpus.
 #
 # Un patrón por tipo de secreto, para que `redact_secrets` no repita tipos.
-# Los de «sk-» exigen que antes no haya letra, dígito, guion bajo ni guion: sin
-# eso, una palabra compuesta de prosa técnica como «task-ant-colony-…» se
-# redactaba como llave de Anthropic.
+#
+# Ningún patrón exige un límite de palabra delante. En un corpus real la llave
+# rara vez va entre espacios: llega detrás de un escape JSON (\n, \t), de un
+# %20 o un %3D de una URL, del =3D de un correo quoted-printable, de la «m» de
+# un color ANSI, de texto chino sin espacios o del «-» de la línea quitada de
+# un diff. Un \b o un (?<!\w) delante deja pasar justo esos casos.
+#
+# La prosa que se parece a una llave tiene dos formas, y cada una se ataja por
+# su lado:
+#
+#   1. La cola de una palabra: «ta|sk-ant-colony-…», «ri|sk-…». Delante de
+#      «sk-» hay dos letras y la segunda es minúscula. Ahí la llave cuenta solo
+#      si el cuerpo trae una mayúscula, como «API Keysk-…» cuando se extrae el
+#      texto de una tabla HTML: la prosa que calza es un slug en minúsculas.
+#   2. Un slug, una ruta o un placeholder que empieza con el prefijo:
+#      «sk-proj-template-for-…», «docs/github_pat_rotation.md»,
+#      «sk-proj-YOUR_API_KEY_HERE». Pasa en los formatos cuyo cuerpo admite
+#      guiones o guiones bajos, y en esos el cuerpo tiene que traer una
+#      mayúscula y un dígito, que una llave real, por ser aleatoria, trae.
+
+
+# Hasta dónde mira un lookahead o una contraseña. Sin tope, la redacción se
+# vuelve cuadrática con un texto como «task-task-task-…» o «postgres://» repetido
+# sin «@»: cada aparición del prefijo recorre de nuevo toda la racha. Con 80 KB
+# eso eran seis segundos, y la ingesta redacta documentos enteros. 200 cubre el
+# cuerpo completo de las llaves de hoy: la más larga, sk-proj-, trae 156.
+_TOPE = 200
+
+
+def _trae(clase: str, *requisitos: str) -> str:
+    """Lookahead: la racha de `clase` que sigue trae cada uno de `requisitos`.
+
+    Recorre la misma clase que el cuerpo de la llave, así que mira justo lo que
+    se va a redactar y no el texto que viene después.
+    """
+    return "".join(f"(?={clase}{{0,{_TOPE}}}{r})" for r in requisitos)
+
+
+def _sk(resto: str, clase: str) -> str:
+    """«sk-» seguido de `resto`, con la guarda de la forma 1."""
+    return f"(?:(?<![A-Za-z][a-z])|(?=sk-{_trae(clase, '[A-Z]')}))sk-{resto}"
+
+
 _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Anthropic va antes que OpenAI: las dos empiezan con «sk-», y si el patrón
     # de OpenAI se ensancha, una llave sk-ant- no debe quedar rotulada como suya.
-    ("anthropic_key", re.compile(r"(?<![\w-])sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("anthropic_key", re.compile(_sk(r"ant-[A-Za-z0-9_\-]{20,}", r"[A-Za-z0-9_\-]"))),
     # OpenAI: las de proyecto, cuenta de servicio y administración traen guiones
-    # y guiones bajos en el cuerpo; el formato viejo, solo alfanuméricos. El
-    # cuerpo con guiones va atado a su prefijo para no arrastrar prosa con «sk-».
+    # y guiones bajos en el cuerpo (forma 2); el formato viejo, solo
+    # alfanuméricos (forma 1).
     ("openai_key", re.compile(
-        r"(?<![\w-])sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{32,}"
-        r"|[A-Za-z0-9]{32,})")),
-    # GitHub: los clásicos (ghp_, gho_, …) y los de grano fino (github_pat_).
+        r"sk-(?:proj|svcacct|admin)-" + _trae(r"[A-Za-z0-9_\-]", "[A-Z]", "[0-9]")
+        + r"[A-Za-z0-9_\-]{32,}|" + _sk(r"[A-Za-z0-9]{32,}", "[A-Za-z0-9]"))),
+    # GitHub: los clásicos (ghp_, gho_, ghu_, ghs_, ghr_) y los de grano fino
+    # (github_pat_), cuyo cuerpo admite guiones bajos (forma 2).
     ("github_token", re.compile(
-        r"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}")),
+        r"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_"
+        + _trae("[A-Za-z0-9_]", "[A-Z]", "[0-9]") + r"[A-Za-z0-9_]{30,}")),
     # AWS: AKIA es la llave de larga duración y ASIA la temporal de STS. Asia
-    # también es una palabra, así que ASIA va entre límites de palabra.
-    ("aws_key", re.compile(r"AKIA[0-9A-Z]{16}|\bASIA[0-9A-Z]{16}\b")),
+    # también es una palabra, así que ASIA se acota más: el cuerpo usa el
+    # alfabeto real del ID (base32: A-Z y 2-7), detrás no puede seguir otra
+    # mayúscula ni dígito, y delante tampoco, salvo que sea el final de un
+    # escape %XX o =XX (X-Amz-Credential%3DASIA… en una URL prefirmada).
+    ("aws_key", re.compile(
+        r"AKIA[0-9A-Z]{16}"
+        r"|(?:(?<=[%=][0-9A-Fa-f]{2})|(?<![A-Z0-9]))ASIA[A-Z2-7]{16}(?![A-Z0-9])")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}")),
-    ("pg_dsn", re.compile(r"postgres(?:ql)?://[^\s:]+:[^\s@]+@[^\s]+")),
+    # La contraseña va acotada por la misma razón que los lookaheads (ver _TOPE).
+    ("pg_dsn", re.compile(r"postgres(?:ql)?://[^\s:]+:[^\s@]{1,256}@[^\s]+")),
 )
 
 

@@ -128,6 +128,30 @@ def test_ninguna_respuesta_puede_traer_credenciales(secreto):
     assert any("credenciales" in f for f in verificar_aserciones([con_secreto]))
 
 
+@pytest.mark.parametrize(
+    "respuesta",
+    [
+        (
+            "Se rota con get_github_pat_from_secret_manager_or_environment() "
+            "[fuente: nota-proveedor.md]"
+        ),
+        (
+            "La política vive en docs/github_pat_rotation_and_expiration_policy.md "
+            "[fuente: nota-proveedor.md]"
+        ),
+        (
+            "El repo acme/sk-admin-console-for-internal-operations-team quedó archivado "
+            "[fuente: nota-proveedor.md]"
+        ),
+        "El código del evento es ASIAEXPORTSUMMIT2026 [fuente: nota-proveedor.md]",
+    ],
+)
+def test_nombrar_un_identificador_no_es_filtrar_una_credencial(respuesta):
+    """El gate pasa cada respuesta por `redact_secrets`, así que un falso
+    positivo de la guarda rechaza el build por una respuesta correcta."""
+    assert verificar_aserciones([traza(respuesta)]) == []
+
+
 def test_una_respuesta_con_contenido_tiene_que_citar():
     sin_cita = traza("El plazo es de 30 días.")
     assert any("no cita ninguna fuente" in f for f in verificar_aserciones([sin_cita]))
