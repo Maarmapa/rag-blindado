@@ -1,12 +1,11 @@
 # rag-blindado
 
 **RAG auditable: recuperación aumentada con controles de seguridad explícitos
-y evaluación de calidad bloqueante en CI/CD.**
+y evaluación de calidad que falla el build bajo umbral.**
 
 Un pipeline RAG completo sobre Postgres + pgvector, donde cada decisión de
 seguridad está mapeada a un riesgo de [OWASP Top 10 for LLM Applications](https://genai.owasp.org/)
-y cada despliegue debe superar umbrales medidos de fidelidad antes de pasar a
-producción.
+y tres métricas de fidelidad corren en CI. Bajo el umbral, el build falla.
 
 *(English summary below / Resumen en inglés más abajo.)*
 
@@ -22,8 +21,10 @@ cosas, no por el modelo:
    el modelo obedece. Acá el contenido recuperado se trata como dato, se analiza
    antes de llegar al prompt, y lo sospechoso va a cuarentena con su motivo
    registrado.
-2. **Nadie mide si las respuestas son ciertas.** Acá tres métricas corren en
-   cada push y un pull request que baja la fidelidad no puede mergearse.
+2. **Nadie mide si las respuestas son ciertas.** Acá las tres métricas Ragas
+   corren en CI y hacen fallar el build si alguna queda bajo el umbral. El
+   bloqueo del merge vale recién cuando un ruleset de rama exija ese check;
+   hoy main todavía no tiene uno.
 3. **El agente puede hacer más de lo que necesita.** Acá el permiso de escritura
    está denegado por defecto y la ingesta corre en `dry-run` salvo decisión
    explícita.
@@ -52,10 +53,10 @@ es alto; capaz donde importa la respuesta.
 
 | Riesgo OWASP | Control | Dónde |
 |---|---|---|
-| **LLM01** Prompt Injection | Detección de instrucciones incrustadas en el texto recuperado + delimitado estructural del contexto en bloques `<documento>` | `ragb/guards.py`, `ragb/generate.py` |
+| **LLM01** Prompt Injection | Reglas heurísticas de texto sobre lo recuperado: lo sospechoso va a cuarentena con el motivo registrado. No es detección perfecta y se pueden evadir. El contexto que sigue se delimita en bloques `<documento>` | `ragb/guards.py`, `ragb/generate.py` |
 | **LLM02** Sensitive Information Disclosure | Redacción de credenciales (claves de API, tokens, DSN) al indexar, sobre el documento entero, y otra vez antes de armar el prompt | `ragb/guards.py`, `ragb/pipeline.py` |
 | **LLM06** Excessive Agency | Mínimo privilegio: lectura acotada por colección, escritura denegada por defecto, `dry_run` como default | `ragb/guards.py` |
-| **LLM08** Vector and Embedding Weaknesses | Filtro por `tenant` a nivel de SQL en toda búsqueda, más RLS en el esquema | `ragb/store.py`, `sql/schema.sql` |
+| **LLM08** Vector and Embedding Weaknesses | El aislamiento que rige hoy es el filtro SQL por `tenant` en toda búsqueda (`ragb/store.py`). RLS está habilitado sobre `documents` en `sql/schema.sql`, como capa adicional prevista, sin políticas todavía | `ragb/store.py`, `sql/schema.sql` |
 | **LLM09** Misinformation | Fail-closed: sin contexto suficiente el sistema declara que no sabe, en vez de completar | `ragb/generate.py` |
 
 El corpus de demo incluye `corpus/nota-proveedor.md`, un documento con una
@@ -77,10 +78,12 @@ Tres métricas sobre un dataset dorado (`evals/dataset.yaml`), calculadas con
 | `answer_relevancy` | La respuesta contesta la pregunta que se hizo | 0.75 |
 | `context_precision` | Lo recuperado era efectivamente relevante | 0.70 |
 
-`python -m evals.run` termina con exit code 1 si alguna cae bajo el umbral. El
-workflow de GitHub Actions corre los tests de guardas en **todo** push (sin
-credenciales, sin costo) y las evals completas contra un Postgres con pgvector
-levantado como servicio.
+`python -m evals.run` termina con exit code 1 si alguna cae bajo el umbral, y
+con eso el workflow falla. Ese resultado bloquea el merge recién cuando un
+ruleset de rama exija el check; hoy main no tiene uno. El workflow de GitHub
+Actions corre los tests de guardas en **todo** push (sin credenciales, sin
+costo) y las evals completas contra un Postgres con pgvector levantado como
+servicio.
 
 Una métrica que no se pudo calcular **no aprueba**. Parece obvio, pero en Python
 `nan` pierde todas las comparaciones —`nan < 0.85` es falso y `nan >= 0.85`
@@ -175,21 +178,23 @@ GitHub Actions.
 ## English summary
 
 **Auditable RAG: retrieval-augmented generation with explicit security controls
-and quality gates that block deployment.**
+and a quality evaluation that fails the build below threshold.**
 
 A complete RAG pipeline on Postgres + pgvector where every security decision
-maps to an [OWASP Top 10 for LLM Applications](https://genai.owasp.org/) risk
-and every deploy must clear measured faithfulness thresholds before reaching
-production.
+maps to an [OWASP Top 10 for LLM Applications](https://genai.owasp.org/) risk.
+Three Ragas metrics run in CI and fail the build below threshold. They block a
+merge only once a branch ruleset requires that check; main has none yet.
 
-Retrieved content is treated as **data, never instructions**: embedded prompt
-injections are detected and quarantined with a logged reason, credentials are
-redacted at ingestion and again before the prompt is assembled, tenant
-isolation is enforced in SQL,
-and write access is denied by default with ingestion running in dry-run unless
-explicitly enabled. Three Ragas metrics — faithfulness, answer relevancy and
-context precision — run against a golden dataset in CI and fail the build below
-threshold.
+Retrieved content is treated as **data, never instructions**: heuristic text
+rules send suspicious fragments to quarantine with a logged reason. That is
+not perfect detection and the rules can be evaded. Credentials are redacted
+at ingestion and again before the prompt is assembled. Tenant isolation today
+is the SQL filter on `tenant` in `ragb/store.py`. Row-level security is
+enabled on `documents` in `sql/schema.sql` as a planned extra layer, still
+without policies. Write access is denied by default, and ingestion runs in
+dry-run unless explicitly enabled. The three metrics — faithfulness, answer
+relevancy and context precision — run against a golden dataset in CI and fail
+the build below threshold.
 
 Embeddings run locally on an open-source model (no per-token cost, documents
 never leave the infrastructure); generation uses a frontier model where
